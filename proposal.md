@@ -11,7 +11,7 @@
 
 ## 1. About me
 
-I am a final-year B.Tech (Information Technology) student at IIITM Gwalior, currently a Software Developer intern at Juspay. My day-to-day work is in low-level infrastructure: replacing CEPH block storage with NVMe/TCP for our payment platform, shipping a Shamir-based secrets layer that removes our dependency on AWS KMS, and writing thread-local + server-local caches in Rust that knocked a few percent off our cross-node call volume at peak.
+I am a final-year B.Tech (Information Technology) student at IIITM Gwalior, currently a Software Developer intern at Juspay (India's largest payments orchestration platform). My day-to-day work is in low-level infrastructure: I led the replacement of our CEPH block-storage tier with Lightbits NVMe/TCP — same workload at 48K TPS vs 37K TPS on roughly a tenth of the hardware (4 nodes vs 40), and active-active Barbican HA on a shared backend. I also shipped a thread-local + server-local cache layer in Rust on hot APIs that cut cross-node calls by ~4% at peak, and a Shamir-based secrets distribution layer with memory-only keys and Raft replication that removed our reliance on AWS KMS.
 
 Before Juspay I built a small 32-bit i386 kernel from scratch in C++ — bootstrapping, PIC + ISR/IRQ wiring, GDT, the usual — because I wanted to understand what a "process" really is on hardware. That project is where my interest in monitors and hypervisors started.
 
@@ -41,15 +41,16 @@ I want to be careful here, because urunc's current design intentionally keeps th
 ### 3.1 Sketch of the design
 
 - Add a `MonitorControl` interface (working name) under `pkg/unikontainers/hypervisors/` with methods for the operations urunc actually needs today, plus the ones #112 explicitly mentions (state query, hotplug, guest interaction).
-- For QEMU, generate `-qmp unix:<sock>,server,nowait` as part of the existing `BuildExecCmd` flow. The first interaction after spawn is the QMP capabilities handshake, then we send `cont`/`stop`/`device_add`/`device_del`/`query-status`/`quit` over the same socket. JSON encoding is small enough that I'd rather hand-roll the wire types than pull in a heavy QMP library, but I'll evaluate `github.com/digitalocean/go-qemu` and a couple of others in the design doc and recommend one with reasons.
-- For Firecracker, the existing `firecracker-go-sdk` already wraps the API socket; the work is mostly wiring urunc's interface methods to the SDK's `PauseVM`, `ResumeVM`, `PatchDrive`, etc., and deciding which subset we actually expose at the urunc layer.
+- For QEMU, generate `-qmp unix:<sock>,server,nowait` as part of the existing `BuildExecCmd` flow. After spawn, the sequence is: read the greeting, send `qmp_capabilities`, then any of the operational commands the interface exposes. Concretely, I would implement these QMP commands in order of project priority — `query-status` (probe + state machine), `quit` (graceful shutdown to replace `killProcess`), `stop`/`cont` (pause/resume), `device_add`/`device_del` (hotplug for virtio-net and virtio-blk first), `chardev-add`/`chardev-remove` (console attach detach), and `query-vcpus`/`query-block` for introspection. JSON over the socket is small enough that I'd rather hand-roll the wire types than pull in a heavy QMP library; I'll evaluate `github.com/digitalocean/go-qemu` and a couple of alternatives in the design doc and recommend one with reasons.
+- For Firecracker, the existing `firecracker-go-sdk` already wraps the API socket; the work is mostly wiring urunc's interface methods to the SDK's `PauseVM` / `ResumeVM` / `PatchDrive` / `PatchMMDS` / `GetMachineConfig` calls, and deciding which subset we actually expose at the urunc layer. Firecracker's API surface is smaller than QEMU's, so the `MonitorControl` interface needs to be expressive enough for QMP without forcing Firecracker to fake operations it doesn't support — capability flags on the interface, the same shape urunc already uses for `SupportsSharedfs`.
 - Socket lifecycle is the tricky part: where the socket lives (per-container subdir under urunc's state dir is the natural choice), who cleans it up, and what happens when the monitor dies between us opening the socket and us using it. I'll work the failure modes out in the design doc before writing code.
-- Keep the CLI-only fallback for monitors without a control socket so this is purely additive.
+- Keep the CLI-only fallback for monitors without a control socket (HVT and similar) so this is purely additive.
 
 ### 3.2 What I would explicitly *not* do
 
 - I won't rip out the existing `BuildExecCmd` / `syscall.Exec` shape. The new socket-based control is layered on top, not a replacement.
 - I won't try to also rewrite the seccomp handling (`PreExec` for HVT) or the monitor-rootfs work in the same project. Those are adjacent but big enough to be their own conversations.
+- I won't add a new monitor (cloud-hypervisor, Dragonball, etc.) inside the LFX scope. The interface should make it easy to add one later — that's a different person's first PR.
 - I won't introduce a new dependency for QMP unless the design doc justifies it.
 
 ### 3.3 What I would prove out before merging
@@ -84,10 +85,20 @@ I expect to break Weeks 4–7 into multiple small PRs rather than one large one,
 
 - **I have already contributed to urunc.** Issue #389 has been ongoing for a few weeks with cmainas and ananos; my last comments included a bench harness and an empirical PIO-exit measurement. The maintainers know my work.
 - **I have shipped upstream before.** Three merged PRs in the [Namma Yatri](https://github.com/nammayatri) open-source ride-hailing org, including a distributed event-driven payout scheduler ([#13442](https://github.com/nammayatri/nammayatri/pull/13442)) running in production. I can navigate a large unfamiliar codebase, take review comments, and get code merged.
-- **I work in Go on Linux infrastructure full-time.** Juspay's storage and secrets layer that I work on day-to-day is Go-heavy; I write the kind of `syscall.Exec` / process-management / Unix-socket code this project needs.
+- **I work in Go and Rust on Linux infrastructure full-time.** Juspay's storage migration that I led (CEPH → Lightbits NVMe/TCP, 40 nodes → 4) and the Rust caching + Go secrets-broker work I shipped there are exactly the kind of `syscall.Exec` / process-management / Unix-socket code this project needs.
 - **Low-level systems is where I want to be.** The BREAK OS kernel project (32-bit i386, GDT, PIC, ISRs, all from scratch in C++) is what got me into this; this LFX project is essentially the userspace side of the same world.
 - **I can debug empirically.** The #389 work involved tracing per-byte PIO exits via `/sys/kernel/debug/kvm/io_exits` rather than guessing — I expect the QMP work to need the same posture, especially around socket lifecycle edge cases.
 - **CNPG + Cluster API project.** My most recent independent project provisions HA Postgres on Kubernetes-on-OpenStack with CAPO + CloudNativePG, RPO=0 and ~7 s failover. It is not directly urunc, but it is the same shape of work: API-driven lifecycle of stateful infrastructure on top of VMM-based isolation.
+
+## 5.1 Work I am doing before applications close
+
+The application window closes May 19. Between now and then, my plan is to land the following so the mentors can see the work, not just read the plan:
+
+- A small standalone Go program in this repo that opens a Unix socket to a `qemu-system-x86_64` instance, sends `qmp_capabilities`, then `query-status` and `quit`. Roughly 100 lines, intentionally throwaway — just to prove the wire shape and identify the rough edges.
+- A second, equally small Go program against the Firecracker API socket using `firecracker-go-sdk`, doing `GetMachineConfig` and `PauseVM`/`ResumeVM` on a stopped microVM.
+- A 1-page sketch in this repo (`docs/design-sketch.md`) of what the `MonitorControl` interface signature would look like and where it would slot into `pkg/unikontainers/hypervisors/types.go`. Not a finished design — a starting point for the actual design doc in week 2.
+
+This is not part of the LFX commitment; it is what I am doing this week regardless, because the only way to know whether the design is right is to write a little of it.
 
 ## 6. Standard LFX cover-letter questions
 

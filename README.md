@@ -14,3 +14,9 @@ Application materials for **LFX Mentorship 2026 Term 2 — CNCF / urunc: Improve
 ## Prior urunc work
 
 - [urunc-dev/urunc#389](https://github.com/urunc-dev/urunc/issues/389) — investigation of high host CPU caused by console output; empirical KVM PIO-exit measurements via a custom `bench-console.sh` harness; ongoing discussion with the urunc maintainers.
+
+## Other merged open-source contributions
+
+- [nammayatri/nammayatri#13442](https://github.com/nammayatri/nammayatri/pull/13442) — Distributed event-driven special-zone driver-payout system (Haskell, Redis, Postgres); production-merged, ~10K rides/day.
+- [nammayatri/nammayatri#13452](https://github.com/nammayatri/nammayatri/pull/13452) — Driver payout status exposed to the rider/driver frontend.
+- [nammayatri/shared-kernel#1108](https://github.com/nammayatri/shared-kernel/pull/1108) — PaytmEDC payment-flow integration.

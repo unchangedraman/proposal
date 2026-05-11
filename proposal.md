@@ -15,6 +15,8 @@ I am a final-year B.Tech (Information Technology) student at IIITM Gwalior, curr
 
 Before Juspay I built a small 32-bit i386 kernel from scratch in C++ — bootstrapping, PIC + ISR/IRQ wiring, GDT, the usual — because I wanted to understand what a "process" really is on hardware. That project is where my interest in monitors and hypervisors started.
 
+Between Nov 2025 and Jan 2026 I worked as an open-source backend engineer on [Namma Yatri](https://github.com/nammayatri), the open-source ride-hailing platform that runs in production across India. My main piece there was [nammayatri/nammayatri#13442](https://github.com/nammayatri/nammayatri/pull/13442) — a distributed, event-driven payout scheduling system for special-zone rides, serving roughly 10,000 rides per day, which cut driver payout latency from weekly cycles down to T+2 hours. The interesting part was the Redis-backed delayed-job scheduler with per-ride locks and idempotent state transitions; that piece had to be exactly-once under production traffic without adding latency to the ride-booking hot path. The follow-up PR [nammayatri/nammayatri#13452](https://github.com/nammayatri/nammayatri/pull/13452) surfaced the resulting payout state to the driver-app frontend. I also shipped a separate [PaytmEDC payment integration in their shared kernel](https://github.com/nammayatri/shared-kernel/pull/1108). All three are merged. I mention this because it is the closest thing I have to "shipped upstream code in a large unfamiliar Haskell codebase with maintainer review" — which is the muscle this LFX project will need.
+
 I have been working with urunc in my home lab for the past few weeks. Issue [urunc-dev/urunc#389](https://github.com/urunc-dev/urunc/issues/389) (high host CPU when consoles are active) is mine, and is where I started talking to Charalampos and Anastassios. I wrote a small KVM-exit + throughput sampler (`bench-console.sh`) and traced the regression to per-byte PIO traps on the 16550 UART; the baseline `serial stdio` configuration was costing roughly 1.16 M PIO exits per 5 s window while a simple virtio-console swap drops that to ~0 and lifts throughput from 2,016 to 73,378 lines/sec (about 36×). That whole thread shaped how I think about urunc's monitor surface and is part of why this project is the one I want to work on.
 
 ## 2. Why this project
@@ -81,6 +83,7 @@ I expect to break Weeks 4–7 into multiple small PRs rather than one large one,
 ## 5. Why I think I am a fit
 
 - **I have already contributed to urunc.** Issue #389 has been ongoing for a few weeks with cmainas and ananos; my last comments included a bench harness and an empirical PIO-exit measurement. The maintainers know my work.
+- **I have shipped upstream before.** Three merged PRs in the [Namma Yatri](https://github.com/nammayatri) open-source ride-hailing org, including a distributed event-driven payout scheduler ([#13442](https://github.com/nammayatri/nammayatri/pull/13442)) running in production. I can navigate a large unfamiliar codebase, take review comments, and get code merged.
 - **I work in Go on Linux infrastructure full-time.** Juspay's storage and secrets layer that I work on day-to-day is Go-heavy; I write the kind of `syscall.Exec` / process-management / Unix-socket code this project needs.
 - **Low-level systems is where I want to be.** The BREAK OS kernel project (32-bit i386, GDT, PIC, ISRs, all from scratch in C++) is what got me into this; this LFX project is essentially the userspace side of the same world.
 - **I can debug empirically.** The #389 work involved tracing per-byte PIO exits via `/sys/kernel/debug/kvm/io_exits` rather than guessing — I expect the QMP work to need the same posture, especially around socket lifecycle edge cases.
@@ -95,7 +98,7 @@ I follow CNCF projects on GitHub and was reading the 2026 Term 2 project ideas l
 I want to spend three months working on a single piece of cloud-native infrastructure at depth, with maintainers reviewing my code, instead of the bouncing-around pattern that drive-by open-source contributions tend to have. urunc specifically is the right size of project for that: small enough that I can hold the whole codebase in my head, and load-bearing enough that the work matters.
 
 **What experience and knowledge / skills do you have that are applicable?**
-Go (Juspay infrastructure, side projects, urunc work to date), Linux systems programming (the kernel project, my Juspay caching work, urunc debugging on KVM), familiarity with VMMs (QEMU on KVM is what my whole urunc lab runs on, Firecracker I have used through the firecracker-go-sdk for a smaller project), and container/OCI internals (some `runc` reading + the urunc debugging gave me the basics). Resume attached separately.
+Go (Juspay infrastructure, side projects, urunc work to date), Linux systems programming (the kernel project, my Juspay caching work, urunc debugging on KVM), familiarity with VMMs (QEMU on KVM is what my whole urunc lab runs on, Firecracker I have used through the firecracker-go-sdk for a smaller project), and container/OCI internals (some `runc` reading + the urunc debugging gave me the basics). On the open-source-collaboration side, my three merged Namma Yatri PRs (Haskell, ~10K rides/day in production) cover the part of this that is not about languages — reading an unfamiliar codebase, taking review, iterating to merge. Resume attached separately.
 
 **What do you hope to get out of this mentorship?**
 - A real piece of upstream urunc that I designed and shipped end-to-end.
@@ -109,7 +112,11 @@ I graduate from IIITM Gwalior in May 2026, so the LFX program (Jun 8 – Aug 31)
 ## 8. Links
 
 - Prior urunc contribution: [urunc-dev/urunc#389](https://github.com/urunc-dev/urunc/issues/389)
-- This proposal repo: https://github.com/unchangedraman/lfx-urunc-monitor-lifecycle
+- This proposal repo: https://github.com/unchangedraman/proposal
+- Merged open-source contributions (Namma Yatri):
+  - [nammayatri/nammayatri#13442](https://github.com/nammayatri/nammayatri/pull/13442) — Special-zone payout system with history (Haskell, Redis, Postgres; ~10K rides/day)
+  - [nammayatri/nammayatri#13452](https://github.com/nammayatri/nammayatri/pull/13452) — Driver payout status exposed to frontend
+  - [nammayatri/shared-kernel#1108](https://github.com/nammayatri/shared-kernel/pull/1108) — PaytmEDC payment flow
 - GitHub: https://github.com/unchangedraman
 - LinkedIn / résumé: [to be added on the LFX form]
 

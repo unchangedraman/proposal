@@ -244,14 +244,21 @@ table.weeks td.phase { font-weight: 500; width: 22%; }
 
 <h3>2.5 &nbsp; urunc so far — what I have learned through issue #389</h3>
 
-<p>A few weeks ago I filed <a href="https://github.com/urunc-dev/urunc/issues/389">urunc-dev/urunc#389</a> against urunc — high host CPU caused by console output in running containers. I wrote a small KVM-exit and throughput sampler (<code>bench-console.sh</code>) and traced the regression to per-byte PIO traps on the 16550 UART; the baseline <code>-serial stdio</code> configuration costs roughly 1.16 M PIO exits per 5-second window, while a simple virtio-console swap drops that to ~0 and lifts throughput from 2,016 to 73,378 lines/sec (about 36×). Through that work I have gained working familiarity with:</p>
+<p>A few weeks ago I picked up <a href="https://github.com/urunc-dev/urunc/issues/389">urunc-dev/urunc#389</a> — high host CPU caused by console output in running containers. A prior contributor had attributed the regression to <code>bufio.Scanner</code> in <code>cmd/urunc/log_forward.go</code>. My own profiling showed that path is not hot during guest execution: that scanner only handles the parent-child JSON log pipe during <code>urunc create</code>; once <code>syscall.Exec()</code> runs, the VMM manages stdio directly. The real cost lives one layer deeper.</p>
+
+<p>I wrote a small KVM-exit and throughput sampler — <code>bench-console.sh</code>, which ananos has since indicated they would like to fold into urunc's CI as a regression check — and traced the regression to per-byte PIO traps on the 16550 UART at port <code>0x3F8</code>. The <code>-serial stdio</code> baseline costs roughly 1.16 M PIO exits per 5-second window, with QEMU's <code>address_space_write</code> dominating the host flame graph. A simple <code>virtio-console</code> swap drops PIO exits to ~0 and lifts throughput from 2,016 to 73,378 lines/sec (about 36×), closing the runc-vs-urunc gap on this workload from roughly 407× down to ~11×.</p>
+
+<p>The thread has since covered: how to differentiate <code>virtio-console</code> from <code>serial</code> without breaking Linux kernels built without <code>CONFIG_VIRTIO_CONSOLE</code> (my first proposal, a capability-intersection design borrowed from urunc's rootfs path, was constructively rejected by @cmainas for exactly that reason); the upcoming pivot from the <code>com.urunc.unikernel.cmdline</code> annotation to a <code>kernelArgs</code>-style annotation that lets users specify boot parameters at build time; and an invitation from @ananos to draft a blog post on the investigation for the Nubificus / CNCF blog.</p>
+
+<p>Through that work I have gained working familiarity with:</p>
 
 <ul>
   <li>urunc's monitor invocation path — <code>pkg/unikontainers/hypervisors/qemu.go</code>, <code>BuildExecCmd</code>, and the <code>syscall.Exec</code>-style handoff in <code>unikontainers.go</code>.</li>
-  <li>The QEMU + KVM monitor surface — what costs PIO exits, how virtio devices change the picture, where the cost actually lives.</li>
+  <li>The distinction between urunc's parent-child JSON log pipe (consumed by <code>bufio.Scanner</code> before <code>syscall.Exec</code>) and the VMM-managed stdio path that takes over after.</li>
+  <li>The QEMU + KVM monitor surface — what costs PIO exits at the 16550 UART, how virtio devices change the picture, where the cost actually lives.</li>
   <li>urunc's Linux unikernel path — <code>pkg/unikontainers/unikernels/linux.go</code>, the boot-params construction, the urunit handshake.</li>
   <li>The <code>VMM</code> interface in <code>pkg/unikontainers/types/types.go</code> and how each monitor (QEMU, Firecracker, HVT) implements it today.</li>
-  <li>An empirical debugging posture for urunc — using <code>/sys/kernel/debug/kvm/io_exits</code> and <code>perf</code> rather than guessing.</li>
+  <li>An empirical debugging posture for urunc — <code>/sys/kernel/debug/kvm/io_exits</code>, <code>perf</code> flame graphs, and a small reproducer image, rather than guessing.</li>
 </ul>
 
 <!-- ============= 3. The project ============= -->
@@ -273,7 +280,7 @@ table.weeks td.phase { font-weight: 500; width: 22%; }
 
 <h3>3.3 &nbsp; Decision points the design doc will resolve</h3>
 
-<p>I have a working position on each of these, but I expect the design doc and your review to settle them — these are not unilateral decisions and I want to be explicit that I know that.</p>
+<p>I have a working position on each of these, but I expect the design doc and your review to settle them — these are not unilateral decisions and I want to be explicit that I know that. On a related note: I have already been through one design-discussion round with @cmainas on this codebase. My first proposal for the virtio-vs-serial console choice (capability-intersection, borrowed from urunc's rootfs path) was constructively rejected because Linux kernels can be built without <code>CONFIG_VIRTIO_CONSOLE</code>. The feedback shape from that round is what I expect from this project's design-doc review, and I have re-set my priors accordingly.</p>
 
 <div class="decision">
   <span class="d-title">Decision 1 · QMP wire types — hand-roll vs adopt a library</span><br>

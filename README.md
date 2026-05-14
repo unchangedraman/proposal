@@ -9,7 +9,9 @@ Application materials for **LFX Mentorship 2026 Term 2 — CNCF / urunc: Improve
 
 ## Contents
 
-- [`proposal.md`](./proposal.md) — full application proposal (problem framing, design sketch, 12-week plan, fit, LFX cover-letter answers).
+- [`cover-letter.pdf`](./cover-letter.pdf) — **the deliverable.** Cover letter for the LFX application, organised under the four LFX questions, packed with the full design sketch, 12-week plan, prior work, and pre-application work. 6-page A4, designed for readability rather than pandoc-default plainness.
+- [`cover-letter.html`](./cover-letter.html) — source of the PDF (rendered via WeasyPrint).
+- [`proposal.md`](./proposal.md) — long-form Markdown version of the same content, used as the source / reference.
 
 ## Prior urunc work
 

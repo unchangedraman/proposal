@@ -1,0 +1,75 @@
+==> building qmp-boot-test...
+==> starting QEMU paused with cloud image attached + QMP socket on /tmp/lfx-d-test.sock
+==> driving Approach D wire flow against the live guest
+
+[t+   0.15ms] connected to /tmp/lfx-d-test.sock
+[t+   0.59ms] <- greeting: {"QMP": {"version": {"qemu": {"micro": 2, "minor": 2, "major": 8}, "package": "Debian 1:8.2.2+ds-0ubuntu1.16"}, "capabilities": ["oob"]}}
+[t+   0.64ms] -> qmp_capabilities   {"execute":"qmp_capabilities"}
+[t+   1.12ms] <- qmp_capabilities   {"return": {}}
+[t+   1.14ms] -> query-status (pre-cont)   {"execute":"query-status"}
+[t+   1.43ms] <- query-status (pre-cont)   {"return": {"status": "prelaunch", "singlestep": false, "running": false}}
+[t+   1.44ms] ==> sending cont (this is the 'start guest' command in Approach D)
+[t+   1.44ms] -> cont   {"execute":"cont"}
+[t+   1.77ms] <- (event) RESUME
+[t+   1.80ms] <- cont   {"return": {}}
+[t+   1.82ms] ==> waiting 5s for guest to begin booting...
+[t+5005.86ms] -> query-status (post-cont)   {"execute":"query-status"}
+[t+5006.11ms] <- query-status (post-cont)   {"return": {"status": "running", "singlestep": false, "running": true}}
+[t+5006.12ms] ==> pause / resume test
+[t+5006.12ms] -> stop   {"execute":"stop"}
+[t+5006.84ms] <- (event) STOP
+[t+5006.85ms] <- stop   {"return": {}}
+[t+5006.85ms] -> query-status (paused)   {"execute":"query-status"}
+[t+5007.01ms] <- query-status (paused)   {"return": {"status": "paused", "singlestep": false, "running": false}}
+[t+5007.01ms] -> cont (resume)   {"execute":"cont"}
+[t+5007.14ms] <- (event) RESUME
+[t+5007.33ms] <- cont (resume)   {"return": {}}
+[t+5007.34ms] -> query-status (resumed)   {"execute":"query-status"}
+[t+5007.41ms] <- query-status (resumed)   {"return": {"status": "running", "singlestep": false, "running": true}}
+[t+5007.41ms] ==> introspection
+[t+5007.41ms] -> query-block   {"execute":"query-block"}
+[t+5007.54ms] <- query-block   {"return": [{"io-status": "ok", "device": "virtio0", "locked": false, "removable": false, "inserted": {"iops_rd": 0, "detect_zeroes": "off", "image": {"virtual-size": 2361393152, "filename": "/tmp/lfx-d-test.qcow2", "cluster-size": 65536, "format": "qcow2", "actual-size": 693833728, "format-specific": {"type": "qcow2", "data": {"compat": "0.10", "compression-type": "zlib", "refcount-bits": 16}}, "dirty-flag": false}, "iops_wr": 0, "ro": false, "node-name": "#block129", "backing_file_depth": 0, "drv": "qcow2", "iops": 0, "bps_wr": 0, "write_threshold": 0, "encrypted": false, "bps": 0, "bps_rd": 0, "cache": {"no-flush": false, "direct": false, "writeback": true}, "file": "/tmp/lfx-d-test.qcow2"}, "qdev": "/machine/peripheral-anon/device[1]/virtio-backend", "type": "unknown"}]}
+[t+5007.54ms] -> query-cpus-fast   {"execute":"query-cpus-fast"}
+[t+5007.63ms] <- query-cpus-fast   {"return": [{"thread-id": 950900, "props": {"core-id": 0, "thread-id": 0, "socket-id": 0}, "qom-path": "/machine/unattached/device[0]", "cpu-index": 0, "target": "x86_64"}]}
+[t+5007.64ms] ==> hotplug: add a virtio-net-pci device
+[t+5007.64ms] -> netdev_add (user)   {"execute":"netdev_add","arguments":{"id":"hotnet0","type":"user"}}
+[t+5007.91ms] <- netdev_add (user)   {"return": {}}
+[t+5007.91ms] -> device_add (virtio-net-pci on rp1)   {"execute":"device_add","arguments":{"bus":"rp1","driver":"virtio-net-pci","id":"hotnet0-dev","netdev":"hotnet0"}}
+[t+5018.68ms] <- device_add (virtio-net-pci on rp1)   {"return": {}}
+[t+5018.69ms] -> query-pci (verify hotplug landed)   {"execute":"query-pci"}
+[t+5018.97ms] <- query-pci (verify hotplug landed)   {"return": [{"bus": 0, "devices": [{"irq_pin": 0, "bus": 0, "qdev_id": "", "slot": 0, "class_info": {"class": 1536, "desc": "Host bridge"}, "id": {"device": 10688, "subsystem-vendor": 6900, "vendor": 32902, "subsystem": 4352}, "function": 0, "regions": []}, {"irq_pin": 1, "bus": 0, "qdev_id": "", "irq": 10, "slot": 1, "class_info": {"class": 512, "desc": "Ethernet controller"}, "id": {"device": 4096, "subsystem-vendor": 6900, "vendor": 6900, "subsystem": 1}, "function": 0, "regions": [{"bar": 0, "size": 32, "address": 49344, "type": "io"}, {"prefetch": false, "mem_type_64": false, "bar": 1, "size": 4096, "address": 4268228608, "type": "memory"}, {"prefetch": true, "mem_type_64": true, "bar": 4, "size": 16384, "address": 4271898624, "type": "memory"}, {"prefetch": false, "mem_type_64": false, "bar": 6, "size": 524288, "address": -1, "type": "memory"}]}, {"irq_pin": 1, "bus": 0, "pci_bridge": {"bus": {"prefetchable_range": {"limit": 4271898623, "base": 4269801472}, "memory_range": {"limit": 4267704319, "base": 4265607168}, "secondary": 1, "io_range": {"limit": 8191, "base": 4096}, "number": 0, "subordinate": 1}, "devices": [{"irq_pin": 1, "bus": 1, "qdev_id": "hotnet0-dev", "irq": 0, "slot": 0, "class_info": {"class": 512, "desc": "Ethernet controller"}, "id": {"device": 4161, "subsystem-vendor": 6900, "vendor": 6900, "subsystem": 4352}, "function": 0, "regions": [{"prefetch": false, "mem_type_64": false, "bar": 1, "size": 4096, "address": 4266131456, "type": "memory"}, {"prefetch": true, "mem_type_64": true, "bar": 4, "size": 16384, "address": 4269801472, "type": "memory"}, {"prefetch": false, "mem_type_64": false, "bar": 6, "size": 524288, "address": -1, "type": "memory"}]}]}, "qdev_id": "rp1", "irq": 11, "slot": 2, "class_info": {"class": 1540, "desc": "PCI bridge"}, "id": {"device": 12, "vendor": 6966}, "function": 0, "regions": [{"prefetch": false, "mem_type_64": false, "bar": 0, "size": 4096, "address": 4268232704, "type": "memory"}]}, {"irq_pin": 1, "bus": 0, "qdev_id": "", "irq": 11, "slot": 3, "class_info": {"class": 256, "desc": "SCSI controller"}, "id": {"device": 4097, "subsystem-vendor": 6900, "vendor": 6900, "subsystem": 2}, "function": 0, "regions": [{"bar": 0, "size": 128, "address": 49152, "type": "io"}, {"prefetch": false, "mem_type_64": false, "bar": 1, "size": 4096, "address": 4268236800, "type": "memory"}, {"prefetch": true, "mem_type_64": true, "bar": 4, "size": 16384, "address": 4271915008, "type": "memory"}]}, {"irq_pin": 0, "bus": 0, "qdev_id": "", "slot": 31, "class_info": {"class": 1537, "desc": "ISA bridge"}, "id": {"device": 10520, "subsystem-vendor": 6900, "vendor": 32902, "subsystem": 4352}, "function": 0, "regions": []}, {"irq_pin": 1, "bus": 0, "qdev_id": "", "irq": 10, "slot": 31, "class_info": {"class": 262, "desc": "SATA controller"}, "id": {"device": 10530, "subsystem-vendor": 6900, "vendor": 32902, "subsystem": 4352}, "function": 2, "regions": [{"bar": 4, "size": 32, "address": 49376, "type": "io"}, {"prefetch": false, "mem_type_64": false, "bar": 5, "size": 4096, "address": 4268240896, "type": "memory"}]}, {"irq_pin": 1, "bus": 0, "qdev_id": "", "irq": 10, "slot": 31, "class_info": {"class": 3077, "desc": "SMBus"}, "id": {"device": 10544, "subsystem-vendor": 6900, "vendor": 32902, "subsystem": 4352}, "function": 3, "regions": [{"bar": 4, "size": 64, "address": 1792, "type": "io"}]}]}]}
+[t+5018.97ms] ==> hotunplug
+[t+5018.98ms] -> device_del   {"execute":"device_del","arguments":{"id":"hotnet0-dev"}}
+[t+5019.22ms] <- device_del   {"return": {}}
+[t+5019.23ms] ==> graceful shutdown: quit
+[t+5019.23ms] -> quit   {"execute":"quit"}
+[t+5019.33ms] <- (event) SHUTDOWN
+[t+5019.66ms] <- quit   {"return": {}}
+[t+5019.66ms] probe complete — all ops succeeded.
+
+==> guest serial log (first 25 lines after boot):
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:01.0 C000 PCI2.10 PnP PMM+3EFCABA0+3EF0ABA0 C000
+Press Ctrl-B to configure iPXE (PCI 00:01.0)...                                                                               
+
+
+Booting from Hard Disk...
+[    0.000000] Linux version 5.15.0-171-generic (buildd@lcy02-amd64-064) (gcc (Ubuntu 11.4.0-1ubuntu1~22.04.2) 11.4.0, GNU ld (GNU Binutils for Ubuntu) 2.38) #181-Ubuntu SMP Fri Feb 6 22:44:50 UTC 2026 (Ubuntu 5.15.0-171.181-generic 5.15.196)
+[    0.000000] Command line: BOOT_IMAGE=/boot/vmlinuz-5.15.0-171-generic root=LABEL=cloudimg-rootfs ro console=tty1 console=ttyS0
+[    0.000000] KERNEL supported cpus:
+[    0.000000]   Intel GenuineIntel
+[    0.000000]   AMD AuthenticAMD
+[    0.000000]   Hygon HygonGenuine
+[    0.000000]   Centaur CentaurHauls
+[    0.000000]   zhaoxin   Shanghai  
+[    0.000000] BIOS-provided physical RAM map:
+[    0.000000] BIOS-e820: [mem 0x0000000000000000-0x000000000009fbff] usable
+[    0.000000] BIOS-e820: [mem 0x000000000009fc00-0x000000000009ffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000000f0000-0x00000000000fffff] reserved
+[    0.000000] BIOS-e820: [mem 0x0000000000100000-0x000000003ffdcfff] usable
+[    0.000000] BIOS-e820: [mem 0x000000003ffdd000-0x000000003fffffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000b0000000-0x00000000bfffffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000fed1c000-0x00000000fed1ffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000feffc000-0x00000000feffffff] reserved

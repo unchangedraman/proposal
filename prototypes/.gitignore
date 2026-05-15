@@ -1,2 +1,3 @@
 qmp-probe/qmp-probe
 firecracker-probe/fc-probe
+qmp-boot-test/qmp-boot-test

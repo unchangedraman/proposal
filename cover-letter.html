@@ -157,20 +157,6 @@ table.weeks tr:nth-child(even) td { background: #f8fafb; }
 table.weeks td.wk { font-weight: 700; color: #2b5564; width: 8%; font-variant-numeric: tabular-nums; }
 table.weeks td.phase { font-weight: 500; width: 22%; }
 
-.decision {
-  background: #fafbfc;
-  border: 1px solid #e4e7eb;
-  border-left: 3px solid #2b5564;
-  padding: 8px 12px;
-  margin: 6px 0;
-  font-size: 9.8pt;
-}
-.decision .d-title {
-  font-weight: 600;
-  color: #2b5564;
-  font-size: 10pt;
-}
-
 .pr-list { margin: 4px 0 8px 18px; padding: 0; }
 .pr-list li { margin-bottom: 3px; }
 .pr-list .pr-tag {
@@ -184,6 +170,22 @@ table.weeks td.phase { font-weight: 500; width: 22%; }
   border-bottom: none;
 }
 .pr-list a { font-weight: 500; }
+
+pre.transcript {
+  background: #0f172a;
+  color: #e2e8f0;
+  font-family: 'JetBrains Mono', 'SF Mono', 'Menlo', monospace;
+  font-size: 8pt;
+  line-height: 1.45;
+  padding: 10px 12px;
+  border-radius: 4px;
+  margin: 8px 0;
+  overflow-x: auto;
+  white-space: pre;
+}
+pre.transcript .c { color: #94a3b8; }
+pre.transcript .k { color: #7dd3fc; }
+pre.transcript .v { color: #fcd34d; }
 </style>
 </head>
 <body>
@@ -202,187 +204,188 @@ table.weeks td.phase { font-weight: 500; width: 22%; }
 
 <div class="meta">
   <span><strong>To:</strong> Charalampos Mainas (@cmainas) &amp; Anastassios Nanos (@ananos) — Nubificus / urunc</span>
-  <span>14 May 2026</span>
+  <span>15 May 2026</span>
 </div>
 
 <div class="summary-bar">
   <span class="pill"><strong>Project:</strong> CNCF · urunc · Improve lifecycle management of sandbox monitors</span>
   <span class="pill"><strong>Upstream:</strong> urunc-dev/urunc#112</span>
+  <span class="pill"><strong>Repo:</strong> github.com/unchangedraman/proposal</span>
+</div>
+
+<div class="intro">
+  <p>This document is my proposal for the LFX 2026 Term 2 project on the urunc monitor-lifecycle issue. It covers the pre-application exercise you asked for in <a href="https://github.com/urunc-dev/urunc/issues/112#issuecomment-2849197345">comment 2 of #112</a> (reading urunc end-to-end and driving each monitor through its API), my background, the architectural question raised in that thread, my position on it, and a 12-week plan. The two prototype clients I wrote for the exercise are in the proposal repo under <code>prototypes/qmp-probe/</code> and <code>prototypes/firecracker-probe/</code>, with run transcripts.</p>
 </div>
 
 <!-- ============= 1. About me ============= -->
 <h2><span class="num">1.</span>About me</h2>
 
-<p>I am Raman Kapoor — a B.Tech (Information Technology) graduate from ABV-IIITM Gwalior (class of 2026), currently working at Juspay, India's largest payments orchestration platform, on low-level Linux infrastructure. My most recent landed piece there was leading the migration of our block-storage tier from CEPH to Lightbits NVMe/TCP — same workload at 48K TPS versus 37K TPS on roughly a tenth of the hardware (four nodes instead of forty), with active-active Barbican HA on a shared backend. Before that I shipped a thread-local and server-local cache layer in Rust on our hot APIs that cut cross-node calls by ~4% at peak, and a Go-based Shamir-secrets distribution broker on top of OpenBao that removed our reliance on AWS KMS for key delivery. Right now I am on the bare-metal datacenter side of the stack — writing the secure-erase command for our internal Rust CLI that drives MAAS-managed hosts through their lifecycle.</p>
+<p>I am Raman Kapoor — a B.Tech (Information Technology) graduate from ABV-IIITM Gwalior (class of 2026), currently working at Juspay, India's largest payments orchestration platform, on low-level Linux infrastructure. My most recent landed piece there was leading the migration of our block-storage tier from CEPH to Lightbits NVMe/TCP: same workload at 48K TPS versus 37K TPS, on four nodes instead of forty, with active-active Barbican HA on a shared backend. The work I am on right now is the <code>wipe-disk</code> command for <code>namma-cli</code>, our Rust CLI that drives bare-metal hosts in the datacenter through MAAS — secure-erase via NVMe Sanitize with an <code>hdparm --security-erase</code> fallback. Before Juspay, I wrote a 32-bit i386 kernel from scratch in C++ during undergrad — bootstrap, protected mode, PIC and ISR wiring, the GDT. That kernel project is what made me want to work on the userspace side of the same problem; urunc and this project are exactly that.</p>
 
-<p>My interest in monitors and hypervisors started earlier than the day job, with a 32-bit i386 kernel I wrote from scratch in C++ during undergrad — bootstrap, protected mode, PIC and ISR wiring, the GDT. That project is what made me want to work on the userspace side of the same problem; urunc and this LFX project are exactly that.</p>
+<!-- ============= 2. Pre-application exercise ============= -->
+<h2><span class="num">2.</span>Pre-application exercise</h2>
 
-<!-- ============= 2. What I have been working on ============= -->
-<h2><span class="num">2.</span>What I have been working on</h2>
+<p>The exercise required in #112 has three pieces: set up urunc and run a container; pick a supported monitor and drive a VM through its API; write up what was difficult and what surprised you. I have been running urunc locally since I filed <a href="https://github.com/urunc-dev/urunc/issues/389">#389</a> a few weeks ago, so the first piece is already work I have shipped against the project. The two pieces below — driving QEMU through QMP, and driving Firecracker through its API — are the new work, plus a deliberate read of urunc's own source to understand the existing lifecycle before proposing a change to it.</p>
 
-<h3>2.1 &nbsp; Open-source contributions to Namma Yatri (Haskell, production)</h3>
+<h3>2.1 &nbsp; Reading urunc's actual control flow</h3>
 
-<p>The work I am proudest of, and the closest match to what this LFX project will involve in terms of <em>shipping upstream code in a large unfamiliar codebase with maintainer review</em>, is my contribution to <a href="https://github.com/nammayatri">Namma Yatri</a> — the open-source ride-hailing platform that runs in production across India. Between November 2025 and January 2026 I shipped three merged PRs into the org:</p>
+<p>Until I read <code>cmd/urunc/create.go</code> end-to-end I had assumed urunc had a long-running process. It does not. Both <code>urunc create</code> and <code>urunc start</code> are transient — they exit after running their phase. The container's init process is QEMU or Firecracker itself, arrived at via a single <code>syscall.Exec</code> inside the reexec process at <code>pkg/unikontainers/unikontainers.go:533</code>. Concretely, what I traced reading the source:</p>
+
+<ul>
+  <li><code>urunc create</code> (<code>cmd/urunc/create.go:90-280</code>) builds the <code>Unikontainer</code> state, sets up an init socket pair plus a log pipe for nsenter IPC, forks the reexec process via <code>createReexecCmd</code> at line 282, reads <code>{stage1_pid, stage2_pid}</code> JSON back from the init pipe, writes <code>state.json</code> with <code>containerPid = reexec_pid</code>, runs <code>CreateRuntime</code> OCI hooks, sends <code>AckReexec</code> to reexec on the init socket, then exits.</li>
+  <li>The reexec process (<code>cmd/urunc/create.go:347-465</code>) runs inside the container's namespaces. It waits for <code>AckReexec</code>, runs <code>CreateContainer</code> hooks, creates a listener on <code>urunc.sock</code> (the <code>FromReexec</code> socket from <code>pkg/unikontainers/ipc.go:33</code>), and then <strong>blocks on <code>AwaitMsg(StartExecve)</code></strong> at line 410. This is the gap the <a href="https://docs.google.com/presentation/d/1ZB1oZm9rhRmdkVAt7cHKZXkRHLM-nPvjwsiT7Hg-mjU/">slide deck</a> wants to use for parallel VMM init.</li>
+  <li><code>urunc start</code> (<code>cmd/urunc/start.go:38-115</code>) is a separate transient invocation. It sends <code>StartExecve</code> to reexec at line 83, waits for <code>StartSuccess</code> at line 102, sets the running state, runs <code>Poststart</code> hooks, and exits.</li>
+  <li>Inside reexec, after <code>StartExecve</code> arrives, <code>Unikontainer.Exec</code> (<code>unikontainers.go:205-533</code>) runs <code>vmm.BuildExecCmd</code> at line 507, sends <code>StartSuccess</code> to urunc start at line 519, runs <code>vmm.PreExec</code> at line 525 (HVT seccomp etc.), and then calls <code>syscall.Exec(vmm.Path(), execCmd, env)</code> at line 533. The reexec process is replaced by QEMU/Firecracker. Same PID. That PID is the <code>containerPid</code> in <code>state.json</code> — which is what the shim and containerd track.</li>
+</ul>
+
+<p>The two facts this exercise drove home, both of which matter for the architectural question in §4.2: there is no persistent urunc daemon on the host, and the container's init process is the monitor itself (not a supervisor). Any redesign has to respect both invariants or has to argue clearly for changing them.</p>
+
+<h3>2.2 &nbsp; QMP probe end-to-end</h3>
+
+<p>I wrote a small Go client that drives a real <code>qemu-system-x86_64 8.2.2</code> instance through its QMP Unix socket. The probe lives at <code>prototypes/qmp-probe/</code> in the repo; <code>run.sh</code> launches QEMU paused with <code>-S</code> and <code>-qmp unix:&lt;path&gt;,server,nowait</code>, then drives it through greeting, <code>qmp_capabilities</code>, <code>query-status</code> before and after <code>cont</code>, <code>query-cpus-fast</code>, <code>stop</code>, and <code>quit</code>. The full transcript runs in roughly 2 milliseconds:</p>
+
+<pre class="transcript">[t+  0.14ms] connected to /tmp/lfx-qmp-probe.sock
+[t+  0.53ms] &lt;- greeting        {QMP: {capabilities: [oob], version: 8.2.2}}
+[t+  0.56ms] -&gt; qmp_capabilities
+[t+  0.94ms] &lt;- qmp_capabilities {return: {}}
+[t+  1.04ms] -&gt; cont
+[t+  1.24ms] &lt;- (async event) RESUME
+[t+  1.25ms] &lt;- cont             {return: {}}
+[t+  1.48ms] -&gt; query-cpus-fast
+[t+  1.71ms] &lt;- query-cpus-fast  [{thread-id, cpu-index, ...}, ...]
+[t+  1.88ms] &lt;- (async event) STOP
+[t+  2.03ms] &lt;- quit             {return: {}}</pre>
+
+<p>The piece of this that taught me something I would not have written into the proposal otherwise: <strong>QMP interleaves async events with command replies on the same socket, in arrival order</strong>. My first version of the client was naive — one read per command — and it worked through the greeting and the handshake and the first <code>query-status</code>. Then <code>cont</code> triggered a <code>RESUME</code> event that arrived before the <code>cont</code> reply, every subsequent read got off by one, and <code>query-cpus-fast</code>'s reply turned up where I was expecting the answer to <code>stop</code>. The fix is straightforward — type-dispatch every frame: <code>{return}</code> and <code>{error}</code> are replies to the most recent in-flight command, <code>{event, timestamp, data}</code> is async telemetry — but it is the kind of thing the docs do not flag and a code-from-spec approach would miss.</p>
+
+<p>Five other concrete observations from the run, documented more fully in <code>prototypes/qmp-probe/README.md</code>:</p>
+
+<ul>
+  <li>The greeting frame on connect is mandatory to consume before any client write.</li>
+  <li><code>qmp_capabilities</code> handshake is a gate — every other command is rejected until it has been sent.</li>
+  <li>Reply payload schemas vary per command (<code>query-status</code> returns an object, <code>query-cpus-fast</code> returns an array, <code>quit</code>/<code>cont</code>/<code>stop</code> return <code>{}</code>). A single Go struct cannot statically type the Return field — <code>json.RawMessage</code> at the wire layer, parse per-command at the caller.</li>
+  <li><code>-qmp unix:&lt;path&gt;,server,nowait</code> is the correct flag combination. <code>nowait</code> matters specifically: it means QEMU initializes its devices and runs setup in parallel with whoever will eventually connect. That is the property the slide deck's parallel-init plan depends on.</li>
+  <li>Latency is not the cost. Round-trip on a Unix socket is sub-millisecond. The cost of a socket-based control plane is in architecture and failure modes, not in latency.</li>
+</ul>
+
+<h3>2.3 &nbsp; Firecracker probe end-to-end</h3>
+
+<p>The companion exercise: a Go client that drives Firecracker v1.13.1 through its HTTP-over-Unix-socket API end-to-end. <code>prototypes/firecracker-probe/</code> in the repo. The script starts <code>firecracker --api-sock /tmp/lfx-fc-probe.sock</code>, then drives the lifecycle: <code>GET /</code> for sanity, <code>PUT /machine-config</code> with 1 vCPU and 128 MiB, <code>PUT /boot-source</code> with kernel and cmdline, <code>PUT /drives/rootfs</code> with the Ubuntu 22.04 ext4, <code>PUT /actions {InstanceStart}</code> to boot, <code>GET /</code> to verify the state transitioned to Running, <code>PATCH /vm {state: Paused/Resumed}</code> to exercise pause/resume, and <code>PUT /actions {SendCtrlAltDel}</code> for graceful shutdown.</p>
+
+<p>The microVM booted Ubuntu 22.04, reached systemd, honored the Ctrl-Alt-Del, and Firecracker exited with <code>exit_code=0</code>. Wall time was around 820 ms in total; the single most expensive call was <code>PUT /actions {InstanceStart}</code> at 16 ms — the actual KVM boot. Every config call was 0.3 to 0.5 ms.</p>
+
+<p>Six findings worth surfacing here (full version in <code>prototypes/firecracker-probe/README.md</code>):</p>
+
+<ul>
+  <li><strong>Firecracker has no command-line equivalent for guest config.</strong> Unlike QEMU's <code>-kernel ... -drive ... -netdev ...</code>, FC v1 accepts only <code>--api-sock</code>, <code>--id</code>, <code>--config-file</code>, and <code>--no-api</code>. There is no exec-with-everything-on-the-cmdline path. "Background mode" is the only mode. Whatever abstraction this LFX project lands must reconcile this with QEMU's exec-mode default.</li>
+  <li><strong>All state-changing endpoints return <code>204 No Content</code>.</strong> The Go client cannot expect a response body for any mutation; state has to be read back via <code>GET /</code>.</li>
+  <li><strong>No async events on the API socket.</strong> Unlike QMP. To detect guest exit, you poll, observe the process exit, or read stderr. urunc's <code>MonitorControl</code> abstraction cannot assume events on every backend — either expose <code>Events() &lt;-chan Event</code> that QMP fills and FC leaves empty, or hide the asymmetry behind a capability flag.</li>
+  <li><strong>Pause/Resume lives on <code>PATCH /vm</code>, not <code>/actions</code>.</strong> FC's REST shape is slightly more REST-ful than QMP's flat command list. urunc's interface unifies them; per-monitor implementations translate.</li>
+  <li><strong>No <code>device_add</code> equivalent.</strong> FC supports <code>PATCH /drives/{id}</code> to swap an existing drive's backing path and updating network rate-limiters, but does not let you attach a brand-new virtio device after boot. Validates the need for capability flags on the interface.</li>
+  <li><strong>The 16 ms InstanceStart is the parallel-init target.</strong> All the config <code>PUT</code>s can happen during the gap where reexec blocks on <code>AwaitMsg(StartExecve)</code>; only the final <code>PUT /actions {InstanceStart}</code> needs to land after <code>urunc start</code>. The QEMU equivalent is <code>-S</code> at spawn plus a QMP <code>cont</code> at start.</li>
+</ul>
+
+<!-- ============= 3. Background ============= -->
+<h2><span class="num">3.</span>Background</h2>
+
+<h3>3.1 &nbsp; Namma Yatri — open-source code I have shipped to production</h3>
+
+<p>Between November 2025 and January 2026 I worked as an open-source backend engineer on <a href="https://github.com/nammayatri">Namma Yatri</a>, the open-source ride-hailing platform that runs in production across India. Three merged PRs in the org:</p>
 
 <ul class="pr-list">
-  <li><span class="pr-tag">feat</span><a href="https://github.com/nammayatri/nammayatri/pull/13442">nammayatri/nammayatri#13442</a> — Special-zone driver-payout scheduling system. A distributed, event-driven scheduler serving roughly 10,000 rides per day; cut driver payout latency from weekly cycles down to T+2 hours under production traffic.</li>
-  <li><span class="pr-tag">feat</span><a href="https://github.com/nammayatri/nammayatri/pull/13452">nammayatri/nammayatri#13452</a> — Exposed the resulting driver-payout state to the driver-app frontend through the API layer.</li>
-  <li><span class="pr-tag">feat</span><a href="https://github.com/nammayatri/shared-kernel/pull/1108">nammayatri/shared-kernel#1108</a> — PaytmEDC payment-flow integration in the shared kernel — config management, checksum generation, API interaction. Went through several review iterations before merge.</li>
+  <li><span class="pr-tag">feat</span><a href="https://github.com/nammayatri/nammayatri/pull/13442">nammayatri/nammayatri#13442</a> — Special-zone driver-payout scheduling system. Around 10,000 rides per day; driver payout latency dropped from weekly cycles to T+2 hours.</li>
+  <li><span class="pr-tag">feat</span><a href="https://github.com/nammayatri/nammayatri/pull/13452">nammayatri/nammayatri#13452</a> — Exposed the resulting payout state to the driver-app frontend.</li>
+  <li><span class="pr-tag">feat</span><a href="https://github.com/nammayatri/shared-kernel/pull/1108">nammayatri/shared-kernel#1108</a> — PaytmEDC payment-flow integration in the shared kernel. Several review rounds before merge.</li>
 </ul>
 
-<p>The technically interesting one is #13442. Driver payouts for special-zone rides (airports, stations) are computed per-ride but were previously paid out only on a weekly batch cycle — a long latency for drivers, and operationally fragile when the batch failed. The new system schedules per-ride payouts at T+2 hours after ride completion, which means roughly 10,000 scheduled jobs in flight at any given moment under load. The constraints made the design non-trivial:</p>
+<p>The technically interesting one is #13442. Driver payouts for special-zone rides (airports, stations) had been a weekly batch. Moving them to T+2 hours per ride meant roughly 10,000 scheduled jobs in flight at any moment under load. The constraints made the design non-trivial: a payout that fires twice is real money lost, a payout that never fires is a real driver unpaid; the ride-booking hot path could not block on scheduling; retries had to be idempotent. The shape I landed on was a Redis sorted-set keyed on ride-id with fire-time as the score, per-ride distributed locks taken at fire time, and an idempotency token persisted before the actual payout call. Scheduling is O(1) on the hot path, the worker pool polls the sorted set, and the per-ride lock plus idempotency token together guarantee exactly-once under broker restart, app restart, and partial-failure scenarios.</p>
+
+<p>I mention this in some detail because it is the closest thing I have done to what this LFX project will involve: working on a large unfamiliar codebase (Haskell, no prior production experience), designing the failure model with maintainers, and getting to merged three times in a row.</p>
+
+<h3>3.2 &nbsp; Juspay — Lightbits, identity service, namma-cli wipe-disk</h3>
+
+<p>The Lightbits migration mentioned in §1 was the headline piece, but the two pieces most relevant to this LFX project's shape are the identity service and the namma-cli wipe-disk work.</p>
+
+<p><strong>Identity and secrets on OpenStack + OpenBao.</strong> We replaced a heavy AWS KMS dependency with an in-house identity-and-secrets layer. The interesting design choices: identity is derived from the VM's network position (IMDS-attested), not from a long-lived token on disk; the root key uses Shamir secret-sharing, split into m-of-n shards across the broker cluster so no single broker holds the full root; keys live in mlock'd pages and the broker refuses to start if core dumps are not sanitized; brokers run a Raft cluster across availability zones, so the service tolerates N&minus;1 broker failures without an outage. The VM-side SDK (<code>osvault</code>, Python) handles attestation, token refresh, leasing, and audit. The error-domain modelling I did there — token-not-yet-issued vs token-expired vs broker-quorum-lost vs network-partitioned — is the same shape of work I expect to do around socket-lifecycle edge cases for QMP and the Firecracker API.</p>
+
+<p><strong>namma-cli wipe-disk.</strong> My current Juspay work is on <code>namma-cli</code>, a Rust CLI that drives bare-metal hosts through MAAS. Hosts are described declaratively in site specs; <code>namma-cli</code> reconciles spec to actual state. The shape is similar to Cluster API scoped to bare metal. I am working on the <code>wipe-disk</code> command — secure-erase before reprovisioning, using NVMe Sanitize with an <code>hdparm --security-erase</code> fallback. The piece worth surfacing here is an engineering-discipline find. The original wipe-disk code matched the SSH-exec result with a broad <code>Err(_)</code> arm and treated <em>any</em> SSH error as the legitimate "host poweroff disconnect", returning <code>Ok(())</code>. In practice that silently masked auth failures, connection-refused, and command-errors before the wipe script ever ran — every one of them returning <code>Ok</code> from a destructive operation that had not actually executed. For wipe-disk specifically, that is the worst possible failure mode: silent false-success on the operation that nukes customer data. I caught this on a local end-to-end test and proposed a discrimination heuristic — if the remote command produced no stdout before the disconnect, treat as an error rather than as expected poweroff. This is the same kind of error-domain discipline the urunc monitor-control plane will need to distinguish "QMP socket closed because we asked for <code>quit</code>" from "QMP socket closed because the monitor died."</p>
+
+<h3>3.3 &nbsp; Other background</h3>
+
+<p><strong>PostgreSQL on Kubernetes / OpenStack.</strong> A 5-layer nested virtualization stack on a single i9-14900 — KVM under OpenStack under Kubernetes under CloudNativePG under Postgres — built to validate the same shape Juspay's production stack runs at on instrumentable hardware. Inner-VM Postgres write-TPS climbed roughly 50% after NUMA-aware CPU pinning and 16 GB of hugepages (the buffer pool was thrashing the TLB at default page sizes). Cluster API for OpenStack plus CloudNativePG bring a HA cluster up in around 12 minutes; primary failover is automatic, around 7 seconds to write-ready, with synchronous WAL streaming guaranteeing RPO=0. Same shape of problem as urunc — API-driven lifecycle of stateful infrastructure on top of VMM-based isolation.</p>
+
+<p><strong>BREAK OS.</strong> Already mentioned in §1; the small i386 kernel I wrote during undergrad. The reason it is in the proposal: the 16550 UART at I/O port <code>0x3F8</code> that I programmed in BREAK OS is the same hardware register the QEMU-emulated UART triggers PIO exits on, which is what made the urunc #389 trace recognizable rather than archaeological.</p>
+
+<h3>3.4 &nbsp; urunc so far — issue #389</h3>
+
+<p>A few weeks ago I picked up <a href="https://github.com/urunc-dev/urunc/issues/389">urunc-dev/urunc#389</a> — high host CPU caused by console output. A prior contributor had attributed the regression to <code>bufio.Scanner</code> in <code>cmd/urunc/log_forward.go</code>; my own profiling showed that path is not hot during guest execution. That scanner only handles the parent-child JSON log pipe during <code>urunc create</code>; once <code>syscall.Exec</code> runs (the same line 533 from §2.1), the VMM manages stdio directly. The real cost lives one layer deeper.</p>
+
+<p>I wrote a small KVM-exit and throughput sampler — <code>bench-console.sh</code>, which @ananos has since indicated they would like to fold into urunc CI as a regression check (#389 comment 17) — and traced the regression to per-byte PIO traps on the 16550 UART at port <code>0x3F8</code>. The <code>-serial stdio</code> baseline costs roughly 1.16 M PIO exits per 5-second window, with QEMU's <code>address_space_write</code> dominating the host flame graph. A simple <code>virtio-console</code> swap drops PIO exits to ~0 and lifts throughput from 2,016 to 73,378 lines/sec (about 36×), closing the runc-vs-urunc gap on this workload from ~407× to ~11×.</p>
+
+<p>The thread has since covered: how to differentiate <code>virtio-console</code> from <code>serial</code> without breaking Linux kernels built without <code>CONFIG_VIRTIO_CONSOLE</code> — my first proposal there (a capability-intersection design borrowed from urunc's rootfs path) was constructively rejected by @cmainas for exactly that reason; the upcoming pivot from the <code>com.urunc.unikernel.cmdline</code> annotation to a <code>kernelArgs</code>-style annotation that lets users specify boot parameters at build time; and an invitation from @ananos to draft a blog post on the investigation. The feedback shape from that round is what I expect from this project's design-doc review, and I have re-set my priors accordingly.</p>
+
+<!-- ============= 4. The project ============= -->
+<h2><span class="num">4.</span>The project — monitor lifecycle for urunc</h2>
+
+<h3>4.1 &nbsp; The problem in container-runtime terms</h3>
+
+<p>Following your steer in <a href="https://github.com/urunc-dev/urunc/issues/112#issuecomment-2879864001">#112 comment 10</a> — frame this in container-runtime terms, not generic VMM terms — the gap is not "urunc cannot do hotplug" but "urunc cannot do most of what a container runtime needs to do <em>after</em> the container's init process starts." Once <code>syscall.Exec</code> hands off to the monitor at <code>unikontainers.go:533</code>, the only handle urunc retains is the PID. <code>urunc kill</code> sends a signal to it. <code>urunc delete</code> cleans up around it. There is no way for urunc to ask the monitor what state the guest is in, to gracefully stop it, to attach a console after the fact, to add a new block device for a volume that wasn't part of the spec, or to detect guest exit without polling the process.</p>
+
+<p>This is fine for the simplest container-runtime contract (start, run, kill) but insufficient for everything modern container runtimes are expected to do: graceful pause/resume across the OCI lifecycle, hotplug for dynamic-volume scenarios, console attach for <code>kubectl exec</code>-style ergonomics, event-driven state tracking for the shim. Both QEMU and Firecracker already expose the necessary mechanisms — QMP and the FC API socket respectively — and the prototypes in §2 confirm both work cleanly. The work this project does is connect urunc's runtime-side state machine to them.</p>
+
+<p>There is a secondary benefit that the <a href="https://docs.google.com/presentation/d/1ZB1oZm9rhRmdkVAt7cHKZXkRHLM-nPvjwsiT7Hg-mjU/">slide deck</a> calls out specifically: the reexec process currently blocks on <code>AwaitMsg(StartExecve)</code> between the create and start phases. The slides target "30-40 ms faster" boot by using that gap for parallel VMM initialization — spawn the monitor in background mode during the gap, send the final "start guest" command once <code>urunc start</code> arrives. The FC probe shows the actual KVM boot is around 16 ms; everything else (machine-config, boot-source, drives) is sub-millisecond and can happen during the gap.</p>
+
+<h3>4.2 &nbsp; The architectural question — and my position</h3>
+
+<p>@AyushSriv06 raised the central question in <a href="https://github.com/urunc-dev/urunc/issues/112#issuecomment-2900xxxxxx">#112 comment 7</a>: preserve the current model where reexec eventually <code>execve</code>s into the monitor and persist the API socket for later urunc commands to reconnect to, or introduce a long-running supervisor process that owns the monitor and the persistent socket connection. You declined to pick for the applicants. I will pick for myself.</p>
+
+<p><strong>I would take the first approach.</strong> The container's init process stays the monitor itself; <code>state.json::containerPid</code> stays the monitor PID; no supervisor sits between the runtime and the container process. Concretely the new flow looks like this:</p>
 
 <ul>
-  <li><strong>Exactly-once execution.</strong> A payout that fires twice is real money lost; a payout that never fires is a real driver not paid. The scheduler had to be exactly-once under broker restart, app restart, and partial-failure scenarios.</li>
-  <li><strong>No latency on the ride-booking hot path.</strong> Scheduling a payout is a side-effect of completing a ride; the ride-completion API could not block on scheduling state.</li>
-  <li><strong>Idempotent state transitions.</strong> A retry of the payout-fire call had to be safe — same input must yield the same end state, not double-debit.</li>
+  <li>During <code>urunc create</code>, the reexec process — after <code>CreateContainer</code> hooks but <em>before</em> blocking on <code>AwaitMsg(StartExecve)</code> — spawns the monitor in background mode as a child process via <code>fork+exec</code> (not <code>execve</code>). For QEMU that means <code>-S -qmp unix:&lt;path&gt;,server,nowait</code>; for Firecracker it means just <code>--api-sock &lt;path&gt;</code>. The monitor is its own process from this moment; the socket is open; <code>state.json::containerPid</code> is updated to the monitor's PID.</li>
+  <li>Reexec then resumes its existing wait on <code>StartExecve</code>. While it waits, the monitor is in parallel initializing devices, mapping kernel images, opening drives — the work that previously had to happen serially after <code>StartExecve</code>.</li>
+  <li>When <code>StartExecve</code> arrives, reexec connects to the monitor's socket and sends the "start guest" command — <code>cont</code> for QEMU (which is paired with the <code>-S</code> at spawn), <code>PUT /actions {InstanceStart}</code> for Firecracker. It sends <code>StartSuccess</code> back to urunc start. Then reexec exits cleanly. It does not <code>execve</code> into anything.</li>
+  <li>For lifecycle operations after start — <code>urunc kill</code>, a new <code>urunc monitor query-status</code>, the shim asking for graceful shutdown — each command opens a fresh connection to the persisted socket, sends the operation, closes. The QMP probe shows round-trips are sub-millisecond on a Unix socket; the per-operation reconnect cost is not a concern. The fallback for sockets that have died is signal-to-PID, exactly as today.</li>
 </ul>
 
-<p>The shape I landed on is a Redis-backed delayed-job scheduler keyed on ride-id, with per-ride distributed locks taken at fire time and an idempotency token persisted before the actual payout call. Scheduling is O(1) on the hot path (a single Redis sorted-set insert with the fire-time as score), and the worker pool polls the sorted set to find due jobs. The per-ride lock ensures only one worker fires a given payout even if two pick it up simultaneously, and the idempotency token means a retry after a partial failure is safe. Working on a Haskell codebase with no prior production Haskell experience, designing the failure model with the team, and getting to merged three times in a row, is the closest thing I have done to what this LFX project will involve — and it is the muscle I am leaning on for that reason.</p>
+<p>The reason I prefer this over a supervisor process comes down to four points. First, OCI compatibility: container runtimes and the shim already expect the container's init process to be the monitor itself, not a wrapping supervisor. Changing that semantic is a bigger and less reversible decision than it looks. Second, failure-mode simplicity: with the supervisor model, a dead monitor with a live supervisor is a new zombie state to model; with the persisted-socket model, a dead monitor means a dead PID and a dead socket and urunc knows. Third, snapshot and restore (if either ever lands in urunc) cares about the monitor's state; the supervisor is incidental. Fourth, the persistent-connection benefit a supervisor would provide is small in practice: Unix-socket reconnect is sub-millisecond, and async-event subscription — the only thing that genuinely benefits from a long-lived connection — can be done by a separate event-sink process (or by the shim) without making the supervisor the container's init.</p>
 
-<h3>2.2 &nbsp; Juspay — production infrastructure work</h3>
+<p>The trade-off I am explicitly accepting is that each lifecycle operation pays one socket-connect cost. Per the QMP probe, that is around 0.2 ms. I think that is the right trade-off for the OCI-compatibility win.</p>
 
-<p>Beyond the storage migration touched on in §1, the work at Juspay most relevant to this LFX project lives in two places: the identity-and-secrets layer running on our OpenStack tenancy, and the bare-metal datacenter-lifecycle CLI I am currently building.</p>
+<h3>4.3 &nbsp; What changes in code</h3>
 
-<h4>2.2.1 &nbsp; Identity and secrets on OpenStack + OpenBao</h4>
-
-<p>We replaced a heavy AWS KMS dependency with an in-house identity-and-secrets layer running on OpenStack VMs and OpenBao. A few design choices shaped most of what I built:</p>
+<p>The work touches roughly six files. The list below is from the source-read in §2.1 and may shift during the design doc, but the shape is concrete enough to commit to:</p>
 
 <ul>
-  <li><strong>Identity derived from the network, not from a long-lived token.</strong> A VM authenticating to the broker presents an IMDS-attested claim — its identity <em>is</em> the network position the orchestrator placed it at, signed by the platform. There is no static credential on disk an attacker can steal. The broker validates the attestation and issues a short-lived RS256-signed token scoped to what that VM is allowed to read.</li>
-  <li><strong>Shamir secret-sharing for the root key.</strong> No single broker node holds the full root; it is split into <em>m</em>-of-<em>n</em> shards distributed across the cluster, and reassembled in memory only when needed. A single compromised node yields no useful secret material.</li>
-  <li><strong>Memory-only keys, never on disk.</strong> Keys live in mlock'd pages; the broker process refuses to start if the OS supports core dumps unsanitized.</li>
-  <li><strong>HA via Raft.</strong> Brokers run a Raft cluster across availability zones, so the identity service tolerates <em>N</em>−1 broker failures without an outage — the same posture etcd or CockroachDB take, applied to secrets.</li>
-  <li><strong>VM-side SDK in Python (<code>osvault</code>)</strong> for the bootstrap flow — handles attestation, token refresh, leasing, and audit. The broker itself is Go.</li>
+  <li><code>pkg/unikontainers/hypervisors/qemu.go</code> — <code>BuildExecCmd</code> adds <code>-qmp unix:&lt;sock&gt;,server,nowait</code> and <code>-S</code> for paused start. Implements the new control interface for QMP: greeting + <code>qmp_capabilities</code> on connect, then per-method translation to <code>query-status</code>, <code>cont</code>, <code>stop</code>, <code>quit</code>, <code>device_add</code>/<code>device_del</code>, <code>chardev-add</code>/<code>chardev-remove</code>. The naive command list, prioritised from the prototype: <code>query-status</code> first (smallest, exercises every path), <code>quit</code> second (replaces the current <code>killProcess</code> in <code>Stop</code>), then pause/resume, then hotplug, then console attach, then introspection.</li>
+  <li><code>pkg/unikontainers/hypervisors/firecracker.go</code> — implements the same control interface backed by <code>firecracker-go-sdk</code>. The piece worth pulling out of the prototype: FC's lack of a CLI option for guest config means the entire boot sequence (machine-config, boot-source, drives, network) is API calls. The change is to do those calls incrementally during the create/start gap rather than as a single config-file load, and only invoke <code>PUT /actions {InstanceStart}</code> when <code>StartExecve</code> lands.</li>
+  <li><code>pkg/unikontainers/hypervisors/types.go</code> — extend the <code>VMM</code> interface (or, more likely, add a sibling <code>MonitorControl</code> interface — design decision, see §4.5) with the post-spawn operations. Capability flags on the interface for asymmetries like "QMP has events, FC does not" and "QMP supports device_add, FC does not," in the same shape urunc already uses for <code>SupportsSharedfs</code>.</li>
+  <li><code>pkg/unikontainers/unikontainers.go</code> — the load-bearing change. <code>Exec</code> (currently ending in <code>syscall.Exec</code> at line 533) splits into: spawn-monitor-in-background (called from reexec during the gap), wait-for-StartExecve, send-start-via-socket (replaces the syscall.Exec), send-StartSuccess. Reexec exits after the "send start" step. The IPC sequencing — making sure the monitor's socket is ready before reexec tries to talk to it — is the part @namansh70747 flagged in <a href="https://github.com/urunc-dev/urunc/issues/112#issuecomment-2860706488">#112 comment 5</a> as the trickier piece; I would handle it via the same retry-with-backoff pattern <code>sendIPCMessageWithRetry</code> in <code>pkg/unikontainers/ipc.go</code> already uses for urunc's own sockets.</li>
+  <li><code>cmd/urunc/kill.go</code>, <code>cmd/urunc/delete.go</code> — update to attempt <code>MonitorControl.Shutdown()</code> first (QMP <code>quit</code>, FC <code>PATCH /vm</code> + <code>SendCtrlAltDel</code>), then fall back to <code>kill</code>-the-PID if the socket is broken or unresponsive. This is the same fallback discipline as the namma-cli wipe-disk error-handling work in §3.2.</li>
+  <li><code>pkg/unikontainers/ipc.go</code> — likely a small addition for any new state transitions (e.g. <code>MonitorReady</code> between background-spawn and StartExecve). The existing message constants may be enough; I will not know for sure until the design doc is written.</li>
 </ul>
 
-<p>The reason I am calling it out for this proposal: it is the closest thing I have at Juspay to what urunc's monitor-control plane needs to be — an API-driven lifecycle service that must be correct under partial failures, talks over Unix-domain or HTTP sockets, and cannot lose state across restarts. The error-domain modelling work I did there (token-not-yet-issued vs token-expired vs broker-quorum-lost vs network-partitioned) is the same shape I expect to do around socket lifecycle for QMP and the Firecracker API.</p>
+<h3>4.4 &nbsp; What I will not do, and what I will prove before each merge</h3>
 
-<h4>2.2.2 &nbsp; Bare-metal datacenter lifecycle — <code>namma-cli</code> and the <code>wipe-disk</code> work in flight</h4>
+<p>Out of scope for this LFX, even if time allows: rewriting urunc's seccomp handling (<code>PreExec</code> for HVT), adding a third monitor (cloud-hypervisor, Dragonball, etc. — the interface should make adding one easier, but doing it is somebody else's first PR), introducing a heavy QMP or FC client library when both prototypes show the wire is small enough to hand-roll, or rewriting the existing reexec/urunc-start IPC channels. The work is layered on top, not a replacement.</p>
 
-<p>My current piece of work at Juspay is on <code>namma-cli</code> — a Rust CLI that drives the lifecycle of bare-metal hosts in our datacenter, sitting on top of MAAS for hardware control. Hosts are described declaratively in site specs; <code>namma-cli</code> reconciles spec → actual state. The architectural shape is similar to Cluster API, scoped to bare metal rather than VMs.</p>
+<p>The four things I commit to having proven before each respective merge: the QMP-controlled QEMU path can spawn paused, query state, gracefully shut down, and hotplug a virtio-net device end-to-end with the existing nginx-on-unikraft integration tests staying green; the Firecracker path can do the equivalent subset; the CLI-only fallback continues to work for HVT and any other monitor that does not expose a socket; an extended <code>bench-console.sh</code> measures the per-round-trip cost of monitor-control on both backends and lands in CI as a regression check.</p>
 
-<p>I am working on the <code>wipe-disk</code> command — secure-erase of all drives on a host before reprovisioning, using NVMe Sanitize where the controller advertises it and falling back to <code>hdparm --security-erase</code>. The CLI orchestrates: power-on via IPMI, MAAS commission into an ephemeral OS, push the wipe script over SSH, run it, wait for <code>poweroff -f</code>, MAAS releases the machine. End-to-end across a real bare-metal pipeline.</p>
+<h3>4.5 &nbsp; Decisions the design doc will resolve</h3>
 
-<p>The piece of that work most worth surfacing here is an engineering-discipline find. The original <code>Maas::wipe_disk</code> code matched the SSH-exec result with a broad <code>Err(_)</code> arm and treated <em>any</em> SSH error as the legitimate "host poweroff disconnect," then returned <code>Ok(())</code>. In practice that silently masks auth failures, connection-refused, network-unreachable, and command-errors before the wipe script ever ran — every one of them returning <code>Ok</code> from a destructive operation that had not actually executed. For <code>wipe-disk</code> specifically, that is the worst possible failure mode: silent false-success on the operation that nukes customer data. I caught this on a local end-to-end test, narrowed it to the match arm, and proposed a discrimination heuristic — if the remote command produced no stdout before the disconnect, treat it as an error rather than as expected poweroff. This is the same kind of error-domain discipline the urunc monitor-control plane will need around socket open/close timing, monitor-process death, and the difference between "QMP socket closed because we asked for <code>quit</code>" and "QMP socket closed because the monitor died."</p>
-
-<h4>2.2.3 &nbsp; Hot-path caching in Rust</h4>
-
-<p>Already touched on in §1. The short version: a thread-local plus server-local cache layer in front of hot read APIs cut cross-node calls by roughly 4% at peak with strict cache-safety boundaries — only immutable, request-scoped data, with a static analyzer enforcing the boundary at compile time so the boundary cannot quietly erode.</p>
-
-<h3>2.3 &nbsp; Independent project: PostgreSQL on Kubernetes / OpenStack</h3>
-
-<p>A 5-layer nested virtualization stack on a single i9-14900 box: bare-metal Linux at the bottom, KVM running an OpenStack tenancy on top, Kubernetes running inside that, CloudNativePG inside Kubernetes, Postgres inside CNPG. The point of stacking it this deep was to validate the same shape Juspay's production stack runs at, on hardware I could actually instrument. The work was equal parts performance tuning, lifecycle automation, and identity plumbing.</p>
-
-<p><strong>Performance tuning.</strong> The inner-VM Postgres saw write-TPS climb roughly 50% after two pieces of work — NUMA-aware CPU pinning of the Postgres workers to the same socket as the L1 hypervisor exposing the disks, and 16 GB of hugepages dedicated to the inner VM. The latter mattered specifically because Postgres' buffer pool was thrashing the TLB at default page sizes; 2 MB pages cut TLB misses enough that the syscall cost on every page fault went away. Tuning at a layer of virtualization you do not control is mostly about <em>measuring</em> what is actually happening, which is the same skill set #389 needed.</p>
-
-<p><strong>Lifecycle automation.</strong> Cluster API for OpenStack (CAPO) provisions VMs declaratively; CloudNativePG is the Kubernetes operator that runs the Postgres cluster. End-to-end: a single <code>kubectl apply</code> brings up a HA Postgres cluster (one primary + N replicas, synchronous WAL streaming) in ~12 minutes from cold. Failover is automatic — CNPG runs a leader-election loop, demotes the failing primary, promotes a healthy replica, and rewires the service endpoint. Tested under primary-VM kill and primary-VM network partition; recovery to write-ready in roughly 7 seconds with RPO=0 (no acknowledged write lost, because the synchronous stream guarantees the standby has it before the primary acks the client).</p>
-
-<p><strong>Identity plumbing.</strong> A Go-based OpenBao broker plus the <code>osvault</code> Python SDK on the VM side delivers secrets at bootstrap — the VM proves its OpenStack-assigned identity via IMDS, the broker validates it, the SDK fetches the secrets it is allowed to. Same shape as the identity work I described in §2.2.1, just applied to a smaller cluster I could rebuild from scratch in an afternoon.</p>
-
-<p>Why this is in the proposal: it is not directly urunc, but it is the same shape of problem — API-driven lifecycle of stateful infrastructure on top of VMM-based isolation, where the layers above the VMM care a lot about what state the VMM is in and need a reliable channel to ask. That is exactly what the urunc monitor-lifecycle work is about.</p>
-
-<h3>2.4 &nbsp; BREAK OS — a 32-bit i386 kernel from scratch</h3>
-
-<p>A small monolithic kernel I wrote in C++ during undergrad — bootstrap from the boot sector, protected-mode transition, 64 KB GDT for memory segmentation and privilege-level isolation, PIC initialization, the ISR / IRQ table wiring, and a tight interrupt path that lands at roughly 0.1 ms response latency. Including it here for two specific reasons.</p>
-
-<p>First: the LFX project is essentially the userspace side of the same world. Everything urunc does is on top of a process that talks to a hypervisor that runs a guest that, on x86_64, ultimately uses the same 16550 UART at I/O port <code>0x3F8</code> that this kernel does. When I read in §2.5 about "per-byte PIO traps at port <code>0x3F8</code>," I am reading about the same hardware register I programmed in BREAK OS — which makes the urunc debugging feel less like archaeology and more like familiar territory.</p>
-
-<p>Second: writing a kernel from scratch is the experience that taught me how to operate at the layer where this LFX project lives. There are no helpful libraries, no managed runtime, no friendly error messages — there is what the hardware does, what the manual says, and what your code makes happen between those two. The same posture is what tracing PIO exits in #389 needed, and it is what the QMP socket-lifecycle work will need.</p>
-
-<h3>2.5 &nbsp; urunc so far — what I have learned through issue #389</h3>
-
-<p>A few weeks ago I picked up <a href="https://github.com/urunc-dev/urunc/issues/389">urunc-dev/urunc#389</a> — high host CPU caused by console output in running containers. A prior contributor had attributed the regression to <code>bufio.Scanner</code> in <code>cmd/urunc/log_forward.go</code>. My own profiling showed that path is not hot during guest execution: that scanner only handles the parent-child JSON log pipe during <code>urunc create</code>; once <code>syscall.Exec()</code> runs, the VMM manages stdio directly. The real cost lives one layer deeper.</p>
-
-<p>I wrote a small KVM-exit and throughput sampler — <code>bench-console.sh</code>, which ananos has since indicated they would like to fold into urunc's CI as a regression check — and traced the regression to per-byte PIO traps on the 16550 UART at port <code>0x3F8</code>. The <code>-serial stdio</code> baseline costs roughly 1.16 M PIO exits per 5-second window, with QEMU's <code>address_space_write</code> dominating the host flame graph. A simple <code>virtio-console</code> swap drops PIO exits to ~0 and lifts throughput from 2,016 to 73,378 lines/sec (about 36×), closing the runc-vs-urunc gap on this workload from roughly 407× down to ~11×.</p>
-
-<p>The thread has since covered: how to differentiate <code>virtio-console</code> from <code>serial</code> without breaking Linux kernels built without <code>CONFIG_VIRTIO_CONSOLE</code> (my first proposal, a capability-intersection design borrowed from urunc's rootfs path, was constructively rejected by @cmainas for exactly that reason); the upcoming pivot from the <code>com.urunc.unikernel.cmdline</code> annotation to a <code>kernelArgs</code>-style annotation that lets users specify boot parameters at build time; and an invitation from @ananos to draft a blog post on the investigation for the Nubificus / CNCF blog.</p>
-
-<p>Through that work I have gained working familiarity with:</p>
+<p>Four open questions where I have a working position but expect the design doc plus your review to settle the final shape. Listing them here so they are not buried in week-2 work:</p>
 
 <ul>
-  <li>urunc's monitor invocation path — <code>pkg/unikontainers/hypervisors/qemu.go</code>, <code>BuildExecCmd</code>, and the <code>syscall.Exec</code>-style handoff in <code>unikontainers.go</code>.</li>
-  <li>The distinction between urunc's parent-child JSON log pipe (consumed by <code>bufio.Scanner</code> before <code>syscall.Exec</code>) and the VMM-managed stdio path that takes over after.</li>
-  <li>The QEMU + KVM monitor surface — what costs PIO exits at the 16550 UART, how virtio devices change the picture, where the cost actually lives.</li>
-  <li>urunc's Linux unikernel path — <code>pkg/unikontainers/unikernels/linux.go</code>, the boot-params construction, the urunit handshake.</li>
-  <li>The <code>VMM</code> interface in <code>pkg/unikontainers/types/types.go</code> and how each monitor (QEMU, Firecracker, HVT) implements it today.</li>
-  <li>An empirical debugging posture for urunc — <code>/sys/kernel/debug/kvm/io_exits</code>, <code>perf</code> flame graphs, and a small reproducer image, rather than guessing.</li>
+  <li><strong>QMP wire types</strong> — hand-roll the small subset urunc actually uses (my current position, based on what the qmp-probe showed about reply schema variance), or adopt <code>github.com/digitalocean/go-qemu</code> or similar. I will benchmark dependency-impact in the design doc.</li>
+  <li><strong>Interface placement</strong> — extend the existing <code>VMM</code> interface, or add a sibling <code>MonitorControl</code> interface. My current position: sibling, because the lifetimes are different. <code>VMM</code> methods are valid from spawn; <code>MonitorControl</code> methods are valid from "after the socket handshake succeeds." Mixing them invites the caller to use a control method before the socket is ready.</li>
+  <li><strong>Socket location and cleanup ownership</strong> — per-container subdirectory under urunc's state dir (<code>/run/urunc/&lt;id&gt;/qmp.sock</code> or <code>fc.sock</code>) is the obvious choice. The question I do not yet have a good answer for is what happens if urunc crashes between socket-open and use. I would prefer to write that recovery policy into the design doc rather than discover it under test.</li>
+  <li><strong>Opt-in vs default-on</strong> — for the first cut, opt-in via an OCI annotation so existing users are not surprised. Once integration tests are green, flip to default-on for monitors that support it. This is the same pattern urunc already uses for shared-fs.</li>
 </ul>
 
-<!-- ============= 3. The project ============= -->
-<h2><span class="num">3.</span>The project — monitor lifecycle (urunc#112)</h2>
+<!-- ============= 5. Plan ============= -->
+<h2><span class="num">5.</span>Plan — 12 weeks (8 Jun – 31 Aug 2026)</h2>
 
-<h3>3.1 &nbsp; The problem</h3>
-
-<p>urunc today shells out to QEMU or Firecracker with a long <code>-x ... -y ...</code> command string. That is enough to <em>start</em> a sandbox, but everything after that — checking what the guest is doing, hotplugging a device, asking the monitor to shut down gracefully, attaching a console after the fact — is either impossible or has to be approximated by signalling the host process and hoping for the best. Both QEMU and Firecracker already expose a much better interface for this: QEMU has the QEMU Machine Protocol (QMP, line-delimited JSON over a Unix socket), and Firecracker exposes a REST-style API socket. Issue <a href="https://github.com/urunc-dev/urunc/issues/112">#112</a> is exactly this gap — urunc has CLI for spawn but no socket-based control plane for the lifecycle that follows.</p>
-
-<p>The cost of not having that surface shows up in real places. Graceful pause/resume is not really possible. Hotplug is not really possible. The urunc-side state machine has to infer monitor state from process exit codes instead of asking the monitor directly. And each new monitor we add (cloud-hypervisor, Dragonball, etc.) is a fresh integration with no shared abstraction.</p>
-
-<h3>3.2 &nbsp; My approach</h3>
-
-<p>I see this project as two pieces that have to land together. The first is a <strong>monitor-agnostic control interface inside urunc</strong> — an internal Go interface that captures the operations urunc actually needs (probe, query state, send shutdown, hotplug net/block, attach console). The existing <code>VMM</code> interface is the natural home; today it carries <code>BuildExecCmd</code>, <code>Stop</code>, <code>Path</code>, <code>UsesKVM</code>, <code>SupportsSharedfs</code>, <code>Ok</code>, and <code>PreExec</code> for HVT seccomp. The new surface extends it without breaking those. The second piece is the <strong>per-monitor implementations</strong> that translate the interface into QMP for QEMU and into the Firecracker API for Firecracker, plus a small fallback for monitors that do not expose a socket (so the existing CLI-only flow keeps working for HVT and similar).</p>
-
-<p>For QEMU, I would generate <code>-qmp unix:&lt;sock&gt;,server,nowait</code> as part of the existing <code>BuildExecCmd</code> flow. After spawn, the sequence is: read the greeting, send <code>qmp_capabilities</code>, then any of the operational commands the interface exposes. The QMP commands I would implement in order of project priority are <code>query-status</code> (probe + state machine), <code>quit</code> (graceful shutdown, replaces <code>killProcess</code>), <code>stop</code>/<code>cont</code> (pause/resume), <code>device_add</code>/<code>device_del</code> (hotplug for virtio-net and virtio-blk first), <code>chardev-add</code>/<code>chardev-remove</code> (console attach/detach), and <code>query-vcpus</code>/<code>query-block</code> for introspection.</p>
-
-<p>For Firecracker, the existing <code>firecracker-go-sdk</code> already wraps the API socket; the work is mostly wiring urunc's interface methods to <code>PauseVM</code> / <code>ResumeVM</code> / <code>PatchDrive</code> / <code>PatchMMDS</code> / <code>GetMachineConfig</code>, and deciding which subset we actually expose at the urunc layer. Firecracker's API surface is smaller than QEMU's, so the interface needs capability flags — the same shape urunc already uses for <code>SupportsSharedfs</code>.</p>
-
-<h3>3.3 &nbsp; Decision points the design doc will resolve</h3>
-
-<p>I have a working position on each of these, but I expect the design doc and your review to settle them — these are not unilateral decisions and I want to be explicit that I know that. On a related note: I have already been through one design-discussion round with @cmainas on this codebase. My first proposal for the virtio-vs-serial console choice (capability-intersection, borrowed from urunc's rootfs path) was constructively rejected because Linux kernels can be built without <code>CONFIG_VIRTIO_CONSOLE</code>. The feedback shape from that round is what I expect from this project's design-doc review, and I have re-set my priors accordingly.</p>
-
-<div class="decision">
-  <span class="d-title">Decision 1 · QMP wire types — hand-roll vs adopt a library</span><br>
-  Either declare our own Go structs for the small subset of QMP messages we use, or pull in <code>github.com/digitalocean/go-qemu</code> (or similar). Default position: hand-roll, because the subset is small and the third-party libraries pull in a lot of code we will not use. Open to evidence otherwise.
-</div>
-
-<div class="decision">
-  <span class="d-title">Decision 2 · Extend <code>VMM</code> vs introduce a sibling <code>MonitorControl</code> interface</span><br>
-  Either grow the existing <code>VMM</code> interface with the new methods, or keep <code>VMM</code> as-is (spawn/exec concerns) and add a parallel <code>MonitorControl</code> interface for post-spawn operations. Default position: sibling interface, because spawn and runtime-control have different lifetimes (the runtime interface only becomes valid after the socket handshake succeeds).
-</div>
-
-<div class="decision">
-  <span class="d-title">Decision 3 · Socket location and cleanup ownership</span><br>
-  Per-container subdirectory under urunc's state dir, removed on container delete. Default position: yes, but who owns the cleanup if urunc crashes between socket open and use? The fallback recovery semantics need a written policy.
-</div>
-
-<div class="decision">
-  <span class="d-title">Decision 4 · Opt-in vs default-on</span><br>
-  Should the new control path be default-on for supported monitors, or opt-in via an OCI annotation initially while we burn it in? Default position: opt-in for the first cut so we do not break anyone's existing flow, default-on once the integration tests are green.
-</div>
-
-<h3>3.4 &nbsp; What I will explicitly not do</h3>
-
-<ul>
-  <li>I will not rip out the existing <code>BuildExecCmd</code> / <code>syscall.Exec</code> shape. The new socket-based control is layered on top, not a replacement.</li>
-  <li>I will not also rewrite the seccomp handling (<code>PreExec</code> for HVT) or the monitor-rootfs work in the same project. Those are adjacent but big enough to be their own conversations.</li>
-  <li>I will not add a new monitor (cloud-hypervisor, Dragonball, etc.) inside the LFX scope. The interface should make adding one later easier — that is a different person's first PR.</li>
-  <li>I will not introduce a new dependency for QMP unless the design doc justifies it.</li>
-</ul>
-
-<h3>3.5 &nbsp; What I will prove out before merging</h3>
-
-<ul>
-  <li>The QMP-controlled QEMU path can spawn, query state, gracefully shut down, and hotplug a virtio-net device end-to-end, with the existing nginx-on-unikraft integration tests still green.</li>
-  <li>The Firecracker path can do the same subset.</li>
-  <li>A simple benchmark — same workload as my #389 work, but measuring monitor-control overhead (round-trip count, socket I/O cost). The design doc gets a real number, not just "it works."</li>
-  <li>The fallback path (CLI-only, no socket) still works for every monitor that uses it today.</li>
-</ul>
-
-<h3>3.6 &nbsp; Stretch goals — if the core scope lands ahead of schedule</h3>
-
-<p>The core deliverable (design doc + QEMU/Firecracker implementation + tests) is what I am committing to. If we land it ahead of the 12-week window, here is what I would propose as the next moves, in priority order — all of them are explicitly out-of-scope unless time allows and the mentors approve:</p>
-
-<ul>
-  <li><strong>Live console attach over QMP <code>chardev-add</code>.</strong> A <code>urunc attach &lt;container&gt;</code> command that opens an interactive console on a running sandbox via the new control plane. Directly closes the gap that issue #389 exposed about the cost of always-on stdio.</li>
-  <li><strong>QMP event subscription.</strong> Have urunc <em>subscribe</em> to QMP events (<code>SHUTDOWN</code>, <code>RESET</code>, <code>STOP</code>, <code>BLOCK_IO_ERROR</code>) instead of polling, and surface them into urunc's container state machine. Cleaner state tracking, less polling overhead.</li>
-  <li><strong>Cloud-hypervisor integration as a third backend</strong> — only as proof that the <code>MonitorControl</code> interface generalizes. Not the deliverable, but a useful sanity check on the abstraction.</li>
-  <li><strong>Wire the <code>bench-console.sh</code> harness from #389 into CI</strong> with two-metric assertions (lines/sec floor + PIO-exits ceiling), so regressions like the one #389 chased are caught automatically.</li>
-</ul>
-
-<!-- ============= 4. Plan ============= -->
-<h2><span class="num">4.</span>Plan — 12 weeks (8 Jun – 31 Aug 2026)</h2>
-
-<p>I plan to break the implementation phases into multiple small PRs rather than one large one, so review can happen in parallel with development. Weekly check-ins with the mentors plus an open draft PR for the design doc as soon as it is started.</p>
+<p>I plan to break the implementation phases into multiple small PRs rather than one large one, so review can happen in parallel with development. The design doc opens as a draft PR from week 1 and stays open through week 3 for asynchronous comments. The verification work in §2 reduces the risk on weeks 4–7 — I am not learning QMP or the FC API for the first time during the implementation.</p>
 
 <table class="weeks">
   <thead>
@@ -396,78 +399,56 @@ table.weeks td.phase { font-weight: 500; width: 22%; }
     <tr>
       <td class="wk">1–2</td>
       <td class="phase">Onboarding + design doc, draft 1</td>
-      <td>Re-read <code>pkg/unikontainers/hypervisors/</code>. Author a "current state of monitor lifecycle in urunc" gist for mentors to correct. Open the draft design doc PR proposing the <code>MonitorControl</code> interface, QMP + Firecracker mapping, socket lifecycle, and resolving decisions 1–4.</td>
+      <td>Re-read <code>pkg/unikontainers/hypervisors/</code> with mentor context. Open a draft design-doc PR in <code>docs/</code> covering the <code>MonitorControl</code> interface, QMP and FC mapping, the reexec flow change, socket lifecycle, and resolving Decisions 1–4 from §4.5.</td>
     </tr>
     <tr>
       <td class="wk">3</td>
       <td class="phase">Design doc revisions, sign-off</td>
-      <td>Address review comments. Tag the doc as ready once mentors sign off. The interface signature and dependency decision are settled before any production code lands.</td>
+      <td>Address review on the draft PR. Interface signature, dependency decision, and the opt-in/default-on policy are settled before any production code lands.</td>
     </tr>
     <tr>
       <td class="wk">4–5</td>
-      <td class="phase">QEMU QMP — MVP then full lifecycle</td>
-      <td>Wire <code>-qmp</code> into QEMU <code>BuildExecCmd</code>. Implement capability handshake, <code>query-status</code>, <code>quit</code> first (small PR). Follow with <code>cont</code>/<code>stop</code>, <code>device_add</code>/<code>device_del</code> for virtio-net and virtio-blk, error handling for unsupported commands. Unit tests for the wire codec.</td>
+      <td class="phase">QEMU + QMP integration</td>
+      <td>Extend <code>qmp-probe</code> code into urunc's QEMU backend. MVP first (<code>query-status</code> + <code>quit</code> + <code>cont</code> — the smallest set that proves the integration), then full lifecycle (<code>stop</code>/<code>cont</code> for pause/resume, <code>device_add</code>/<code>device_del</code> for virtio-net and virtio-blk hotplug). Unit tests for the wire codec.</td>
     </tr>
     <tr>
       <td class="wk">6–7</td>
-      <td class="phase">Firecracker API + state-machine integration</td>
-      <td>Implement the same <code>MonitorControl</code> surface against <code>firecracker-go-sdk</code> — pause/resume, drive patch, network patch where applicable. Plumb the control path through <code>unikontainers.go</code> so urunc's state machine uses it. Confirm the CLI-only fallback still works.</td>
+      <td class="phase">Firecracker API + reexec rewiring</td>
+      <td>Same <code>MonitorControl</code> surface for FC, backed by <code>firecracker-go-sdk</code>. Land the reexec flow change: monitor spawned in background mode during the create/start gap, <code>syscall.Exec</code> path retained behind a feature flag.</td>
     </tr>
     <tr>
       <td class="wk">8–9</td>
       <td class="phase">Tests, CI, hotplug demo</td>
-      <td>Integration tests in the existing layout. Extend <code>bench-console.sh</code> to time QMP round-trip cost. CI workflow update. End-to-end demo: start a unikraft-nginx sandbox, hotplug a second virtio-net device, verify connectivity, document the recipe.</td>
+      <td>Integration tests in the existing layout. Extend <code>bench-console.sh</code> to time the new round-trip costs on QMP and FC. End-to-end demo: start a unikraft-nginx sandbox, hotplug a second virtio-net device, verify connectivity inside the guest. Document the recipe.</td>
     </tr>
     <tr>
       <td class="wk">10</td>
       <td class="phase">Bug-fix + user-facing docs</td>
-      <td>Review-comment cleanup across all open PRs. User docs: how to talk to a urunc sandbox's QMP socket, how to opt into the new control path, what guarantees the interface gives.</td>
+      <td>Review-comment cleanup across all open PRs. User docs covering how to talk to a urunc sandbox's QMP socket and how to opt into the new control path.</td>
     </tr>
     <tr>
       <td class="wk">11–12</td>
       <td class="phase">Buffer + final clean-up + blog post</td>
-      <td>Reserved for slippage. If none, take a follow-up issue from the mentors' backlog. Mentee blog post for the CNCF / Nubificus blog covering the architecture and the numbers.</td>
+      <td>Reserved for slippage. If none, take a follow-up issue from the maintainers' backlog. Mentee blog post for the CNCF / Nubificus blog covering the redesign and the numbers.</td>
     </tr>
   </tbody>
 </table>
 
-<h3>4.1 &nbsp; Risk register and mitigations</h3>
+<h3>5.1 &nbsp; Risk register</h3>
 
-<p>Twelve weeks is short. I am being explicit about what could slip and how I would handle each:</p>
-
-<div class="decision">
-  <span class="d-title">Risk · Design doc takes longer than two weeks to land.</span><br>
-  Mitigation: I begin the design doc immediately after onboarding and keep it as an open draft PR from week 1, so feedback can land asynchronously. If week 3 still has open structural questions, I deliberately pick the simpler of the two options to unblock the QEMU MVP and revisit the harder one mid-implementation, rather than blocking on consensus.
-</div>
-
-<div class="decision">
-  <span class="d-title">Risk · QMP socket lifecycle edge cases (monitor dies between open and use, partial writes, double-close) are noisier than the design doc accounts for.</span><br>
-  Mitigation: I plan a small fault-injection harness in week 4 that exercises monitor death at each step of the handshake; surprises surface there rather than in the integration tests.
-</div>
-
-<div class="decision">
-  <span class="d-title">Risk · Firecracker SDK changes shape mid-project.</span><br>
-  Mitigation: pin the SDK version in <code>go.mod</code> at the start of week 6, watch the SDK release notes weekly, and only upgrade inside the LFX window if a fix we need lands upstream.
-</div>
-
-<div class="decision">
-  <span class="d-title">Risk · The existing integration test suite is slower to run than expected and adding QMP tests blows up CI time.</span><br>
-  Mitigation: I budget a half-week (part of week 8) to profile and trim the test suite; precedent for that kind of work in §2.5 — I already use <code>perf</code> and KVM debugfs to find what is actually slow.
-</div>
-
-<!-- ============= 5. Pre-application work ============= -->
-<h2><span class="num">5.</span>Pre-application work — in flight before May 19</h2>
-
-<p>Between now and the application deadline I am landing the following in the proposal repo (<a href="https://github.com/unchangedraman/proposal">github.com/unchangedraman/proposal</a>) so you can see the work, not just read the plan:</p>
+<p>Twelve weeks is short. The risks I see and how I would handle each:</p>
 
 <ul>
-  <li>A small standalone Go program that opens a Unix socket to a <code>qemu-system-x86_64</code> instance, sends <code>qmp_capabilities</code>, then <code>query-status</code> and <code>quit</code>. ~100 lines, intentionally throwaway — just to prove the wire shape and surface the rough edges.</li>
-  <li>A second, equally small Go program against the Firecracker API socket using <code>firecracker-go-sdk</code>, doing <code>GetMachineConfig</code> and <code>PauseVM</code> / <code>ResumeVM</code> on a stopped microVM.</li>
-  <li>A one-page sketch (<code>docs/design-sketch.md</code>) of what the <code>MonitorControl</code> interface signature would look like and where it slots into <code>pkg/unikontainers/hypervisors/types.go</code>. Not a finished design — a starting point for the actual design doc in weeks 1–2.</li>
-  <li>A short note on the <code>bench-console.sh</code> harness extension I would propose for CI — two-metric assertions (lines-per-sec floor and PIO-exits-per-window ceiling), reading from <code>/sys/kernel/debug/kvm/</code> exactly as the original script does, so the regression that #389 chased is caught automatically going forward.</li>
+  <li><strong>Design doc takes longer than two weeks.</strong> The doc opens as a draft PR from week 1 so async review is possible. If week 3 still has unresolved structural questions, I deliberately pick the simpler of the two options to unblock the QEMU MVP and revisit the harder one mid-implementation, rather than blocking everything on consensus.</li>
+  <li><strong>QMP socket-lifecycle edge cases are noisier than the design doc accounts for.</strong> Built a small fault-injection harness during week 4 — kill the monitor at each step of the handshake, observe what reexec and urunc start each do. Edge cases surface there rather than in week-9 integration tests.</li>
+  <li><strong>Firecracker SDK churn mid-project.</strong> Pin <code>firecracker-go-sdk</code> in <code>go.mod</code> at week 6. Only upgrade if a fix we need lands upstream.</li>
+  <li><strong>The reexec-flow change is more invasive than expected.</strong> Feature-flag it from the start; the legacy <code>syscall.Exec</code> path stays the default until the new path has integration-test green in week 8. This is also the riskiest piece of the project — the IPC sequencing point @namansh70747 raised — so it gets the most buffer.</li>
+  <li><strong>CI test-suite slowness blows up.</strong> Budget half a week (part of week 8) to profile and trim. Precedent for that posture in §3.4 — using <code>perf</code> and KVM debugfs to find what is actually slow rather than guessing.</li>
 </ul>
 
-<p>None of this is part of the LFX commitment; it is what I am doing this week regardless, because the only way to know whether the design is right is to write a little of it. The proposal repository (<a href="https://github.com/unchangedraman/proposal">github.com/unchangedraman/proposal</a>) is where these artifacts will land as they are written, alongside this PDF.</p>
+<h3>5.2 &nbsp; If the core scope lands ahead of schedule</h3>
+
+<p>Four follow-ups in order of priority, all explicitly out-of-scope unless time allows and you approve: wire the extended <code>bench-console.sh</code> into urunc CI with two-metric assertions (lines-per-sec floor, PIO-exits-per-window ceiling) so the regression #389 chased is caught automatically; implement <code>chardev-add</code> live console attach so <code>urunc attach &lt;id&gt;</code> works for an existing sandbox; subscribe to QMP events (<code>SHUTDOWN</code>, <code>RESET</code>, <code>BLOCK_IO_ERROR</code>) as a long-running goroutine and surface them into urunc's state machine; experimentally wire a third backend (cloud-hypervisor) as proof the interface generalises.</p>
 
 </body>
 </html>

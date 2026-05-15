@@ -1,0 +1,65 @@
+==> building fc-probe...
+==> starting firecracker (api-sock=/tmp/lfx-fc-probe.sock)...
+==> running fc-probe...
+
+[t+  0.00ms] -> GET /
+[t+  1.09ms] <- 200 OK
+{
+  "id": "lfx-probe",
+  "state": "Not started",
+  "vmm_version": "1.13.1",
+  "app_name": "Firecracker"
+}
+[t+  1.21ms] -> PUT /machine-config {"mem_size_mib":128,"vcpu_count":1}
+[t+  1.65ms] <- 204 No Content (empty body)
+[t+  1.68ms] -> PUT /boot-source {"boot_args":"console=ttyS0 reboot=k panic=1 pci=off","kernel_image_path":"/tmp/vmlinux.bin"}
+[t+  1.99ms] <- 204 No Content (empty body)
+[t+  2.02ms] -> PUT /drives/rootfs {"drive_id":"rootfs","is_read_only":true,"is_root_device":true,"path_on_host":"/tmp/rootfs.ext4"}
+[t+  2.38ms] <- 204 No Content (empty body)
+[t+  2.41ms] -> PUT /actions {"action_type":"InstanceStart"}
+[t+ 18.43ms] <- 204 No Content (empty body)
+[t+819.48ms] -> GET /
+[t+819.92ms] <- 200 OK
+{
+  "id": "lfx-probe",
+  "state": "Running",
+  "vmm_version": "1.13.1",
+  "app_name": "Firecracker"
+}
+[t+819.93ms] -> PATCH /vm {"state":"Paused"}
+[t+820.12ms] <- 204 No Content (empty body)
+[t+820.12ms] -> PATCH /vm {"state":"Resumed"}
+[t+820.44ms] <- 204 No Content (empty body)
+[t+820.46ms] -> PUT /actions {"action_type":"SendCtrlAltDel"}
+[t+820.55ms] <- 204 No Content (empty body)
+[t+820.55ms] probe complete.
+
+==> done. firecracker process state:
+    exited cleanly
+
+==> firecracker log (tail):
+[[0;32m  OK  [0m] Stopped [0;1;39mDispatch Password …ts to Console Directory Watch[0m.
+[[0;32m  OK  [0m] Stopped [0;1;39mForward Password R…uests to Wall Directory Watch[0m.
+[[0;32m  OK  [0m] Stopped target [0;1;39mLocal Verity Protected Volumes[0m.
+[[0;32m  OK  [0m] Unset automount [0;1;39mArbitrary …s File System Automount Point[0m.
+[[0;32m  OK  [0m] Stopped [0;1;39mApply Kernel Variables[0m.
+[[0;32m  OK  [0m] Stopped [0;1;39mLoad Kernel Modules[0m.
+         Unmounting [0;1;39mTemporary Directory /tmp[0m...
+[[0;32m  OK  [0m] Stopped [0;1;39mCreate Static Device Nodes in /dev[0m.
+         Starting [0;1;39mRule-based Manage…for Device Events and Files[0m...
+[[0;32m  OK  [0m] Finished [0;1;39mColdplug All udev Devices[0m.
+[[0;32m  OK  [0m] Stopped [0;1;39mLoad/Save Random Seed[0m.
+[[0;32m  OK  [0m] Unmounted [0;1;39mTemporary Directory /tmp[0m.
+         Unmounting [0;1;39m/var/lib/systemd[0m...
+[[0;32m  OK  [0m] Stopped [0;1;39mRemount Root and Kernel File Systems[0m.
+[[0;32m  OK  [0m] Unmounted [0;1;39m/var/lib/systemd[0m.
+[[0;32m  OK  [0m] Stopped target [0;1;39mSwaps[0m.
+[[0;32m  OK  [0m] Reached target [0;1;39mSystem Shutdown[0m.
+[[0;32m  OK  [0m] Reached target [0;1;39mUnmount All Filesystems[0m.
+[[0;32m  OK  [0m] Reached target [0;1;39mLate Shutdown Services[0m.
+[[0;32m  OK  [0m] Finished [0;1;39mSystem Reboot[0m.
+[[0;32m  OK  [0m] Reached target [0;1;39mSystem Reboot[0m.
+[    0.932366] reboot: Restarting system
+2026-05-15T16:38:46.979669450 [lfx-probe:main] Vmm is stopping.
+2026-05-15T16:38:46.980083955 [lfx-probe:main] Vmm is stopping.
+2026-05-15T16:38:47.003058934 [lfx-probe:main] Firecracker exiting successfully. exit_code=0

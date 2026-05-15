@@ -1,0 +1,93 @@
+==> building qmp-probe...
+==> starting qemu (paused, no guest disk) with -qmp on /tmp/lfx-qmp-probe.sock ...
+==> running qmp-probe against /tmp/lfx-qmp-probe.sock ...
+
+[t+  0.14ms] connected to /tmp/lfx-qmp-probe.sock
+[t+  0.53ms] <- greeting
+{
+  "QMP": {
+    "capabilities": [
+      "oob"
+    ],
+    "version": {
+      "package": "Debian 1:8.2.2+ds-0ubuntu1.16",
+      "qemu": {
+        "major": 8,
+        "micro": 2,
+        "minor": 2
+      }
+    }
+  }
+}
+[t+  0.56ms] -> {"execute":"qmp_capabilities"}
+[t+  0.94ms] <- qmp_capabilities
+{
+  "return": {}
+}
+[t+  0.95ms] -> {"execute":"query-status"}
+[t+  1.15ms] <- query-status (before cont)
+{
+  "return": {
+    "status": "prelaunch",
+    "singlestep": false,
+    "running": false
+  }
+}
+[t+  1.15ms] -> {"execute":"cont"}
+[t+  1.32ms] <- (async event) RESUME
+[t+  1.33ms] <- cont
+{
+  "return": {}
+}
+[t+  1.33ms] -> {"execute":"query-status"}
+[t+  1.48ms] <- query-status (after cont)
+{
+  "return": {
+    "status": "running",
+    "singlestep": false,
+    "running": true
+  }
+}
+[t+  1.48ms] -> {"execute":"query-cpus-fast"}
+[t+  1.71ms] <- query-cpus-fast
+{
+  "return": [
+    {
+      "thread-id": 941614,
+      "props": {
+        "core-id": 0,
+        "thread-id": 0,
+        "socket-id": 0
+      },
+      "qom-path": "/machine/unattached/device[0]",
+      "cpu-index": 0,
+      "target": "x86_64"
+    },
+    {
+      "thread-id": 941615,
+      "props": {
+        "core-id": 1,
+        "thread-id": 0,
+        "socket-id": 0
+      },
+      "qom-path": "/machine/unattached/device[2]",
+      "cpu-index": 1,
+      "target": "x86_64"
+    }
+  ]
+}
+[t+  1.71ms] -> {"execute":"stop"}
+[t+  1.87ms] <- (async event) STOP
+[t+  1.88ms] <- stop
+{
+  "return": {}
+}
+[t+  1.88ms] -> {"execute":"quit"}
+[t+  2.02ms] <- (async event) SHUTDOWN
+[t+  2.03ms] <- quit
+{
+  "return": {}
+}
+[t+  2.04ms] probe complete.
+
+==> done. QEMU has been told to quit via QMP.

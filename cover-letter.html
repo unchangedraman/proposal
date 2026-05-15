@@ -213,7 +213,9 @@ table.weeks td.phase { font-weight: 500; width: 22%; }
 <!-- ============= 1. About me ============= -->
 <h2><span class="num">1.</span>About me</h2>
 
-<p>I am Raman Kapoor — a B.Tech (Information Technology) graduate from ABV-IIITM Gwalior (class of 2026), currently working at Juspay, India's largest payments orchestration platform, on low-level Linux infrastructure. My most recent piece there was leading the migration of our block-storage tier from CEPH to Lightbits NVMe/TCP — same workload at 48K TPS versus 37K TPS on roughly a tenth of the hardware (four nodes instead of forty), with active-active Barbican HA on a shared backend. Before that I shipped a thread-local and server-local cache layer in Rust on our hot APIs that cut cross-node calls by ~4% at peak, and a Go-based Shamir-secrets distribution broker on top of OpenBao that removed our reliance on AWS KMS for key delivery.</p>
+<p>I am Raman Kapoor — a B.Tech (Information Technology) graduate from ABV-IIITM Gwalior (class of 2026), currently working at Juspay, India's largest payments orchestration platform, on low-level Linux infrastructure. My most recent landed piece there was leading the migration of our block-storage tier from CEPH to Lightbits NVMe/TCP — same workload at 48K TPS versus 37K TPS on roughly a tenth of the hardware (four nodes instead of forty), with active-active Barbican HA on a shared backend. Before that I shipped a thread-local and server-local cache layer in Rust on our hot APIs that cut cross-node calls by ~4% at peak, and a Go-based Shamir-secrets distribution broker on top of OpenBao that removed our reliance on AWS KMS for key delivery. Right now I am on the bare-metal datacenter side of the stack — writing the secure-erase command for our internal Rust CLI that drives MAAS-managed hosts through their lifecycle.</p>
+
+<p>My interest in monitors and hypervisors started earlier than the day job, with a 32-bit i386 kernel I wrote from scratch in C++ during undergrad — bootstrap, protected mode, PIC and ISR wiring, the GDT. That project is what made me want to work on the userspace side of the same problem; urunc and this LFX project are exactly that.</p>
 
 <!-- ============= 2. What I have been working on ============= -->
 <h2><span class="num">2.</span>What I have been working on</h2>
@@ -223,24 +225,70 @@ table.weeks td.phase { font-weight: 500; width: 22%; }
 <p>The work I am proudest of, and the closest match to what this LFX project will involve in terms of <em>shipping upstream code in a large unfamiliar codebase with maintainer review</em>, is my contribution to <a href="https://github.com/nammayatri">Namma Yatri</a> — the open-source ride-hailing platform that runs in production across India. Between November 2025 and January 2026 I shipped three merged PRs into the org:</p>
 
 <ul class="pr-list">
-  <li><span class="pr-tag">feat</span><a href="https://github.com/nammayatri/nammayatri/pull/13442">nammayatri/nammayatri#13442</a> — Special-zone driver-payout scheduling system. A distributed, event-driven scheduler serving roughly 10,000 rides per day; cut driver payout latency from weekly cycles down to T+2 hours under production traffic. The interesting part was the Redis-backed delayed-job scheduler with per-ride locks and idempotent state transitions — exactly-once execution without adding latency to the ride-booking hot path.</li>
+  <li><span class="pr-tag">feat</span><a href="https://github.com/nammayatri/nammayatri/pull/13442">nammayatri/nammayatri#13442</a> — Special-zone driver-payout scheduling system. A distributed, event-driven scheduler serving roughly 10,000 rides per day; cut driver payout latency from weekly cycles down to T+2 hours under production traffic.</li>
   <li><span class="pr-tag">feat</span><a href="https://github.com/nammayatri/nammayatri/pull/13452">nammayatri/nammayatri#13452</a> — Exposed the resulting driver-payout state to the driver-app frontend through the API layer.</li>
   <li><span class="pr-tag">feat</span><a href="https://github.com/nammayatri/shared-kernel/pull/1108">nammayatri/shared-kernel#1108</a> — PaytmEDC payment-flow integration in the shared kernel — config management, checksum generation, API interaction. Went through several review iterations before merge.</li>
 </ul>
 
-<p>All three are merged and live. Working on a Haskell codebase with no prior Haskell production experience, taking serious code-review, and getting to "merged" three times in a row, is the muscle I expect this LFX project to need.</p>
+<p>The technically interesting one is #13442. Driver payouts for special-zone rides (airports, stations) are computed per-ride but were previously paid out only on a weekly batch cycle — a long latency for drivers, and operationally fragile when the batch failed. The new system schedules per-ride payouts at T+2 hours after ride completion, which means roughly 10,000 scheduled jobs in flight at any given moment under load. The constraints made the design non-trivial:</p>
+
+<ul>
+  <li><strong>Exactly-once execution.</strong> A payout that fires twice is real money lost; a payout that never fires is a real driver not paid. The scheduler had to be exactly-once under broker restart, app restart, and partial-failure scenarios.</li>
+  <li><strong>No latency on the ride-booking hot path.</strong> Scheduling a payout is a side-effect of completing a ride; the ride-completion API could not block on scheduling state.</li>
+  <li><strong>Idempotent state transitions.</strong> A retry of the payout-fire call had to be safe — same input must yield the same end state, not double-debit.</li>
+</ul>
+
+<p>The shape I landed on is a Redis-backed delayed-job scheduler keyed on ride-id, with per-ride distributed locks taken at fire time and an idempotency token persisted before the actual payout call. Scheduling is O(1) on the hot path (a single Redis sorted-set insert with the fire-time as score), and the worker pool polls the sorted set to find due jobs. The per-ride lock ensures only one worker fires a given payout even if two pick it up simultaneously, and the idempotency token means a retry after a partial failure is safe. Working on a Haskell codebase with no prior production Haskell experience, designing the failure model with the team, and getting to merged three times in a row, is the closest thing I have done to what this LFX project will involve — and it is the muscle I am leaning on for that reason.</p>
 
 <h3>2.2 &nbsp; Juspay — production infrastructure work</h3>
 
-<p>Beyond the storage migration mentioned above, the work at Juspay most relevant to this project is the secrets-distribution layer: a Go-based broker on top of OpenBao that uses Shamir secret-sharing for key distribution, keeps keys memory-only, and replicates via Raft. The integration includes RS256 token signing and IMDS-based identity discovery for secure VM bootstrap. That body of work is where most of my <code>syscall</code>-heavy Go and Unix-socket experience comes from — the exact surface this LFX project lives on.</p>
+<p>Beyond the storage migration touched on in §1, the work at Juspay most relevant to this LFX project lives in two places: the identity-and-secrets layer running on our OpenStack tenancy, and the bare-metal datacenter-lifecycle CLI I am currently building.</p>
+
+<h4>2.2.1 &nbsp; Identity and secrets on OpenStack + OpenBao</h4>
+
+<p>We replaced a heavy AWS KMS dependency with an in-house identity-and-secrets layer running on OpenStack VMs and OpenBao. A few design choices shaped most of what I built:</p>
+
+<ul>
+  <li><strong>Identity derived from the network, not from a long-lived token.</strong> A VM authenticating to the broker presents an IMDS-attested claim — its identity <em>is</em> the network position the orchestrator placed it at, signed by the platform. There is no static credential on disk an attacker can steal. The broker validates the attestation and issues a short-lived RS256-signed token scoped to what that VM is allowed to read.</li>
+  <li><strong>Shamir secret-sharing for the root key.</strong> No single broker node holds the full root; it is split into <em>m</em>-of-<em>n</em> shards distributed across the cluster, and reassembled in memory only when needed. A single compromised node yields no useful secret material.</li>
+  <li><strong>Memory-only keys, never on disk.</strong> Keys live in mlock'd pages; the broker process refuses to start if the OS supports core dumps unsanitized.</li>
+  <li><strong>HA via Raft.</strong> Brokers run a Raft cluster across availability zones, so the identity service tolerates <em>N</em>−1 broker failures without an outage — the same posture etcd or CockroachDB take, applied to secrets.</li>
+  <li><strong>VM-side SDK in Python (<code>osvault</code>)</strong> for the bootstrap flow — handles attestation, token refresh, leasing, and audit. The broker itself is Go.</li>
+</ul>
+
+<p>The reason I am calling it out for this proposal: it is the closest thing I have at Juspay to what urunc's monitor-control plane needs to be — an API-driven lifecycle service that must be correct under partial failures, talks over Unix-domain or HTTP sockets, and cannot lose state across restarts. The error-domain modelling work I did there (token-not-yet-issued vs token-expired vs broker-quorum-lost vs network-partitioned) is the same shape I expect to do around socket lifecycle for QMP and the Firecracker API.</p>
+
+<h4>2.2.2 &nbsp; Bare-metal datacenter lifecycle — <code>namma-cli</code> and the <code>wipe-disk</code> work in flight</h4>
+
+<p>My current piece of work at Juspay is on <code>namma-cli</code> — a Rust CLI that drives the lifecycle of bare-metal hosts in our datacenter, sitting on top of MAAS for hardware control. Hosts are described declaratively in site specs; <code>namma-cli</code> reconciles spec → actual state. The architectural shape is similar to Cluster API, scoped to bare metal rather than VMs.</p>
+
+<p>I am working on the <code>wipe-disk</code> command — secure-erase of all drives on a host before reprovisioning, using NVMe Sanitize where the controller advertises it and falling back to <code>hdparm --security-erase</code>. The CLI orchestrates: power-on via IPMI, MAAS commission into an ephemeral OS, push the wipe script over SSH, run it, wait for <code>poweroff -f</code>, MAAS releases the machine. End-to-end across a real bare-metal pipeline.</p>
+
+<p>The piece of that work most worth surfacing here is an engineering-discipline find. The original <code>Maas::wipe_disk</code> code matched the SSH-exec result with a broad <code>Err(_)</code> arm and treated <em>any</em> SSH error as the legitimate "host poweroff disconnect," then returned <code>Ok(())</code>. In practice that silently masks auth failures, connection-refused, network-unreachable, and command-errors before the wipe script ever ran — every one of them returning <code>Ok</code> from a destructive operation that had not actually executed. For <code>wipe-disk</code> specifically, that is the worst possible failure mode: silent false-success on the operation that nukes customer data. I caught this on a local end-to-end test, narrowed it to the match arm, and proposed a discrimination heuristic — if the remote command produced no stdout before the disconnect, treat it as an error rather than as expected poweroff. This is the same kind of error-domain discipline the urunc monitor-control plane will need around socket open/close timing, monitor-process death, and the difference between "QMP socket closed because we asked for <code>quit</code>" and "QMP socket closed because the monitor died."</p>
+
+<h4>2.2.3 &nbsp; Hot-path caching in Rust</h4>
+
+<p>Already touched on in §1. The short version: a thread-local plus server-local cache layer in front of hot read APIs cut cross-node calls by roughly 4% at peak with strict cache-safety boundaries — only immutable, request-scoped data, with a static analyzer enforcing the boundary at compile time so the boundary cannot quietly erode.</p>
 
 <h3>2.3 &nbsp; Independent project: PostgreSQL on Kubernetes / OpenStack</h3>
 
-<p>A 5-layer nested virtualization stack (KVM → OpenStack → Kubernetes → CloudNativePG → Postgres) on a single i9-14900, optimized via NUMA-aware CPU pinning and 16 GB hugepages. Zero-touch HA provisioning using Cluster API (CAPO) and CloudNativePG — ~12 min cluster bring-up, ~7 s automatic failover, RPO=0. A separate Go-based OpenBao broker plus a custom Python SDK (<code>osvault</code>) handles secret delivery to VM bootstrap. Not directly urunc, but the same shape of problem: API-driven lifecycle of stateful infrastructure on top of VMM-based isolation.</p>
+<p>A 5-layer nested virtualization stack on a single i9-14900 box: bare-metal Linux at the bottom, KVM running an OpenStack tenancy on top, Kubernetes running inside that, CloudNativePG inside Kubernetes, Postgres inside CNPG. The point of stacking it this deep was to validate the same shape Juspay's production stack runs at, on hardware I could actually instrument. The work was equal parts performance tuning, lifecycle automation, and identity plumbing.</p>
+
+<p><strong>Performance tuning.</strong> The inner-VM Postgres saw write-TPS climb roughly 50% after two pieces of work — NUMA-aware CPU pinning of the Postgres workers to the same socket as the L1 hypervisor exposing the disks, and 16 GB of hugepages dedicated to the inner VM. The latter mattered specifically because Postgres' buffer pool was thrashing the TLB at default page sizes; 2 MB pages cut TLB misses enough that the syscall cost on every page fault went away. Tuning at a layer of virtualization you do not control is mostly about <em>measuring</em> what is actually happening, which is the same skill set #389 needed.</p>
+
+<p><strong>Lifecycle automation.</strong> Cluster API for OpenStack (CAPO) provisions VMs declaratively; CloudNativePG is the Kubernetes operator that runs the Postgres cluster. End-to-end: a single <code>kubectl apply</code> brings up a HA Postgres cluster (one primary + N replicas, synchronous WAL streaming) in ~12 minutes from cold. Failover is automatic — CNPG runs a leader-election loop, demotes the failing primary, promotes a healthy replica, and rewires the service endpoint. Tested under primary-VM kill and primary-VM network partition; recovery to write-ready in roughly 7 seconds with RPO=0 (no acknowledged write lost, because the synchronous stream guarantees the standby has it before the primary acks the client).</p>
+
+<p><strong>Identity plumbing.</strong> A Go-based OpenBao broker plus the <code>osvault</code> Python SDK on the VM side delivers secrets at bootstrap — the VM proves its OpenStack-assigned identity via IMDS, the broker validates it, the SDK fetches the secrets it is allowed to. Same shape as the identity work I described in §2.2.1, just applied to a smaller cluster I could rebuild from scratch in an afternoon.</p>
+
+<p>Why this is in the proposal: it is not directly urunc, but it is the same shape of problem — API-driven lifecycle of stateful infrastructure on top of VMM-based isolation, where the layers above the VMM care a lot about what state the VMM is in and need a reliable channel to ask. That is exactly what the urunc monitor-lifecycle work is about.</p>
 
 <h3>2.4 &nbsp; BREAK OS — a 32-bit i386 kernel from scratch</h3>
 
-<p>A small monolithic kernel I wrote in C++ from scratch — bootstrap, protected mode, PIC + ISR/IRQ wiring, 64 KB GDT, ~0.1 ms interrupt response. I include it because it is where my interest in monitors and hypervisors started, and because the LFX project is, in some sense, the userspace side of the same world.</p>
+<p>A small monolithic kernel I wrote in C++ during undergrad — bootstrap from the boot sector, protected-mode transition, 64 KB GDT for memory segmentation and privilege-level isolation, PIC initialization, the ISR / IRQ table wiring, and a tight interrupt path that lands at roughly 0.1 ms response latency. Including it here for two specific reasons.</p>
+
+<p>First: the LFX project is essentially the userspace side of the same world. Everything urunc does is on top of a process that talks to a hypervisor that runs a guest that, on x86_64, ultimately uses the same 16550 UART at I/O port <code>0x3F8</code> that this kernel does. When I read in §2.5 about "per-byte PIO traps at port <code>0x3F8</code>," I am reading about the same hardware register I programmed in BREAK OS — which makes the urunc debugging feel less like archaeology and more like familiar territory.</p>
+
+<p>Second: writing a kernel from scratch is the experience that taught me how to operate at the layer where this LFX project lives. There are no helpful libraries, no managed runtime, no friendly error messages — there is what the hardware does, what the manual says, and what your code makes happen between those two. The same posture is what tracing PIO exits in #389 needed, and it is what the QMP socket-lifecycle work will need.</p>
 
 <h3>2.5 &nbsp; urunc so far — what I have learned through issue #389</h3>
 
@@ -320,6 +368,17 @@ table.weeks td.phase { font-weight: 500; width: 22%; }
   <li>The fallback path (CLI-only, no socket) still works for every monitor that uses it today.</li>
 </ul>
 
+<h3>3.6 &nbsp; Stretch goals — if the core scope lands ahead of schedule</h3>
+
+<p>The core deliverable (design doc + QEMU/Firecracker implementation + tests) is what I am committing to. If we land it ahead of the 12-week window, here is what I would propose as the next moves, in priority order — all of them are explicitly out-of-scope unless time allows and the mentors approve:</p>
+
+<ul>
+  <li><strong>Live console attach over QMP <code>chardev-add</code>.</strong> A <code>urunc attach &lt;container&gt;</code> command that opens an interactive console on a running sandbox via the new control plane. Directly closes the gap that issue #389 exposed about the cost of always-on stdio.</li>
+  <li><strong>QMP event subscription.</strong> Have urunc <em>subscribe</em> to QMP events (<code>SHUTDOWN</code>, <code>RESET</code>, <code>STOP</code>, <code>BLOCK_IO_ERROR</code>) instead of polling, and surface them into urunc's container state machine. Cleaner state tracking, less polling overhead.</li>
+  <li><strong>Cloud-hypervisor integration as a third backend</strong> — only as proof that the <code>MonitorControl</code> interface generalizes. Not the deliverable, but a useful sanity check on the abstraction.</li>
+  <li><strong>Wire the <code>bench-console.sh</code> harness from #389 into CI</strong> with two-metric assertions (lines/sec floor + PIO-exits ceiling), so regressions like the one #389 chased are caught automatically.</li>
+</ul>
+
 <!-- ============= 4. Plan ============= -->
 <h2><span class="num">4.</span>Plan — 12 weeks (8 Jun – 31 Aug 2026)</h2>
 
@@ -372,6 +431,30 @@ table.weeks td.phase { font-weight: 500; width: 22%; }
   </tbody>
 </table>
 
+<h3>4.1 &nbsp; Risk register and mitigations</h3>
+
+<p>Twelve weeks is short. I am being explicit about what could slip and how I would handle each:</p>
+
+<div class="decision">
+  <span class="d-title">Risk · Design doc takes longer than two weeks to land.</span><br>
+  Mitigation: I begin the design doc immediately after onboarding and keep it as an open draft PR from week 1, so feedback can land asynchronously. If week 3 still has open structural questions, I deliberately pick the simpler of the two options to unblock the QEMU MVP and revisit the harder one mid-implementation, rather than blocking on consensus.
+</div>
+
+<div class="decision">
+  <span class="d-title">Risk · QMP socket lifecycle edge cases (monitor dies between open and use, partial writes, double-close) are noisier than the design doc accounts for.</span><br>
+  Mitigation: I plan a small fault-injection harness in week 4 that exercises monitor death at each step of the handshake; surprises surface there rather than in the integration tests.
+</div>
+
+<div class="decision">
+  <span class="d-title">Risk · Firecracker SDK changes shape mid-project.</span><br>
+  Mitigation: pin the SDK version in <code>go.mod</code> at the start of week 6, watch the SDK release notes weekly, and only upgrade inside the LFX window if a fix we need lands upstream.
+</div>
+
+<div class="decision">
+  <span class="d-title">Risk · The existing integration test suite is slower to run than expected and adding QMP tests blows up CI time.</span><br>
+  Mitigation: I budget a half-week (part of week 8) to profile and trim the test suite; precedent for that kind of work in §2.5 — I already use <code>perf</code> and KVM debugfs to find what is actually slow.
+</div>
+
 <!-- ============= 5. Pre-application work ============= -->
 <h2><span class="num">5.</span>Pre-application work — in flight before May 19</h2>
 
@@ -381,9 +464,10 @@ table.weeks td.phase { font-weight: 500; width: 22%; }
   <li>A small standalone Go program that opens a Unix socket to a <code>qemu-system-x86_64</code> instance, sends <code>qmp_capabilities</code>, then <code>query-status</code> and <code>quit</code>. ~100 lines, intentionally throwaway — just to prove the wire shape and surface the rough edges.</li>
   <li>A second, equally small Go program against the Firecracker API socket using <code>firecracker-go-sdk</code>, doing <code>GetMachineConfig</code> and <code>PauseVM</code> / <code>ResumeVM</code> on a stopped microVM.</li>
   <li>A one-page sketch (<code>docs/design-sketch.md</code>) of what the <code>MonitorControl</code> interface signature would look like and where it slots into <code>pkg/unikontainers/hypervisors/types.go</code>. Not a finished design — a starting point for the actual design doc in weeks 1–2.</li>
+  <li>A short note on the <code>bench-console.sh</code> harness extension I would propose for CI — two-metric assertions (lines-per-sec floor and PIO-exits-per-window ceiling), reading from <code>/sys/kernel/debug/kvm/</code> exactly as the original script does, so the regression that #389 chased is caught automatically going forward.</li>
 </ul>
 
-<p>This is not part of the LFX commitment; it is what I am doing this week regardless, because the only way to know whether the design is right is to write a little of it.</p>
+<p>None of this is part of the LFX commitment; it is what I am doing this week regardless, because the only way to know whether the design is right is to write a little of it. The proposal repository (<a href="https://github.com/unchangedraman/proposal">github.com/unchangedraman/proposal</a>) is where these artifacts will land as they are written, alongside this PDF.</p>
 
 </body>
 </html>
